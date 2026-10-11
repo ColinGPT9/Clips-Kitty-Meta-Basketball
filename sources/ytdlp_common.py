@@ -196,3 +196,119 @@ def games_from_info(info: dict | None, platform: str) -> list[dict]:
             tags = " ".join(str(t) for t in (info.get("tags") or [])[:25])
             games.append({"name": "", "start": 0.0, "end": duration, "hint": tags})
     return games
+
+
+# ---- which yt-dlp this copy of the app is running ---------------------------
+#
+# Twitch, Kick and YouTube change something regularly, and yt-dlp fixes it
+# within days — but the copy inside Clips Kitty is frozen at build time
+# (clips-studio.spec collects yt_dlp into the installer), so an installed app
+# can be carrying an extractor that was fixed upstream last week. The gap
+# shows up as a download that stopped working, and the failure itself never
+# says which yt-dlp produced it: the version is the first thing needed to
+# triage a report, so it travels with the failure. Issue #39, and the
+# user-facing note in KNOWN-ISSUES.md.
+
+_version: str | None = None
+
+
+def installed_version() -> str:
+    """The yt-dlp this process is actually running: the bundled one in an
+    installed build, and site-packages in a checkout. Either way it is the same
+    import, and the same one `server/feedback.py` puts in a report.
+
+    Read once and cached. "unknown" when it cannot be read at all: this is
+    called from an error path, and a diagnostic is not worth raising a second
+    exception over.
+    """
+    global _version
+    if _version is None:
+        try:
+            from yt_dlp.version import __version__
+
+            _version = str(__version__)
+        except Exception:
+            _version = "unknown"
+    return _version
+
+
+# The words yt-dlp uses when the site changed under the extractor, rather than
+# the network or the account failing. "Confirm you are on the latest version"
+# is yt-dlp's own hint, printed with exactly these errors, which makes it the
+# strongest evidence available that this copy is the old one.
+_EXTRACTOR_SIGNS = (
+    "unable to extract",
+    "no video formats found",
+    "unsupported url",
+    "nsig extraction failed",
+    "confirm you are on the latest version",
+)
+
+# Reaching the site failed. A newer yt-dlp would not have helped, so it must
+# not be suggested: pointing someone at a version when their connection is the
+# problem only moves them further from the answer.
+_NETWORK_SIGNS = (
+    "timed out", "timeout", "connection refused", "connection reset",
+    "connection aborted", "temporary failure in name resolution", "getaddrinfo",
+    "network is unreachable", "no route to host", "incomplete read",
+    "unable to download webpage", "http error 5",
+)
+
+# The video's own access rules: signed-in, members-only, geo-blocked. Also not
+# a version problem, and also not something a re-download fixes.
+_ACCESS_SIGNS = (
+    "sign in", "not a bot", "cookies", "login required", "private video",
+    "video unavailable", "has been removed", "members-only", "members only",
+    "join this channel", "age-restricted", "confirm your age", "premieres in",
+    "forbidden", "unauthorized", "http error 401", "http error 403",
+    "not available in your country", "unavailable in your country",
+)
+
+_RELEASES = "https://github.com/yt-dlp/yt-dlp/releases"
+
+
+def failure_note(error: BaseException) -> str | None:
+    """One line to add to a download failure, or None to leave it exactly as
+    it is.
+
+    None for a cancellation (nothing failed) and for anything the source
+    modules have already put into the app's own words — every one of those
+    raises ValueError (`youtube._friendly_errors`, `kick._gone_or_raise`: an
+    age-gated video, a deleted Kick VOD, a live stream, a link for the wrong
+    platform). Those already say what happened, and a version appended to them
+    reads as noise.
+
+    What is left is yt-dlp's own text, which is where the version earns its
+    place: it is not in the message, it is the first thing a maintainer needs,
+    and someone reporting "Kick stopped working" can now paste it. A newer
+    version is named only when the failure has the shape of a site change;
+    otherwise the version is given as context and nothing is claimed about the
+    cause. See tests/test_ytdlp_failure_diagnostics.py.
+
+    Nothing from `error` is copied into the note, so this cannot put a cookie
+    or a private URL back into a message the job layer scrubbed on the way
+    out (server/jobs.py).
+    """
+    if isinstance(error, (cancel.CancelledError, ValueError)):
+        return None
+    text = str(error).lower()
+    version = installed_version()
+    if any(sign in text for sign in _EXTRACTOR_SIGNS):
+        return (
+            f"Clips Kitty's bundled yt-dlp is {version}. This reads like a change on the "
+            f"site, which yt-dlp fixes within days — but the copy inside the app is fixed "
+            f"at build time, so a newer yt-dlp may already have the fix: {_RELEASES}"
+        )
+    if any(sign in text for sign in _NETWORK_SIGNS):
+        return (
+            f"Clips Kitty's bundled yt-dlp is {version}. This reads as the connection "
+            f"failing rather than the app or the link, so a newer yt-dlp is very unlikely "
+            f"to change it."
+        )
+    if any(sign in text for sign in _ACCESS_SIGNS):
+        return (
+            f"Clips Kitty's bundled yt-dlp is {version}. This reads as the video's own "
+            f"access rules rather than the app, so a newer yt-dlp is very unlikely to "
+            f"change it."
+        )
+    return f"Clips Kitty's bundled yt-dlp is {version}."

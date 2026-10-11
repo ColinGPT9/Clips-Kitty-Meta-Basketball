@@ -8,7 +8,7 @@ and uses ids that can't collide (YouTube: 11-char, Twitch: tw_, Kick: kick_).
 from pathlib import Path
 
 from core.models import DownloadedVideo
-from sources import kick, twitch, youtube
+from sources import kick, twitch, youtube, ytdlp_common
 
 
 def identify(url: str) -> tuple[str, str | None]:
@@ -151,8 +151,22 @@ def download(url: str, output_dir: Path, vertical: bool = False) -> DownloadedVi
             "The uploaded video's imported copy is gone — upload the file again."
         )
     _clear_stale_partials(output_dir, video_id)
-    if source == "twitch":
-        return twitch.download(url, output_dir, vertical=vertical)
-    if source == "kick":
-        return kick.download(url, output_dir, vertical=vertical)
-    return youtube.download(url, output_dir, vertical=vertical)
+    try:
+        if source == "twitch":
+            return twitch.download(url, output_dir, vertical=vertical)
+        if source == "kick":
+            return kick.download(url, output_dir, vertical=vertical)
+        return youtube.download(url, output_dir, vertical=vertical)
+    except Exception as e:
+        # Every platform's download passes through here, so the yt-dlp version
+        # travels with the failure from one place rather than three.
+        # `ytdlp_common.failure_note` decides when it belongs (it is left off
+        # cancellations and off the failures the sources already explain).
+        #
+        # The exception is re-raised, not replaced: only its message grows, so
+        # callers catching DownloadError, ValueError or Exception still do, and
+        # the traceback still points at the platform that failed.
+        note = ytdlp_common.failure_note(e)
+        if note:
+            e.args = (f"{e}\n\n{note}",)
+        raise
