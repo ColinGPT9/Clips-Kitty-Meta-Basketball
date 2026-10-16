@@ -193,6 +193,8 @@ class PreviewIn(BaseModel):
     # pending hand fixes of who is talking (video/captions.py paint_turns);
     # None keeps the clip's saved ones, an empty list previews it with none
     speaker_edits: list | None = None
+    # pending Captions on/off switch; None keeps the clip's saved choice
+    captions: bool | None = None
 
 
 class CreatorGamingLayoutIn(BaseModel):
@@ -1736,7 +1738,7 @@ def create_app(config: dict, settings_path: Path) -> FastAPI:
                 "end": row["end_s"],
                 "duration": round(row["end_s"] - row["start_s"], 1),
                 "crop": opts.get("crop", "track"),
-                "captions_enabled": opts.get("captions", True),
+                "captions_enabled": opts.get("captions", opts.get("job_captions", True)),
                 "caption_style": opts.get("caption_style", {}),
             }
 
@@ -1851,6 +1853,8 @@ def create_app(config: dict, settings_path: Path) -> FastAPI:
             opts["subline"] = body.subline
         if body.speaker_edits is not None:
             opts["speaker_edits"] = body.speaker_edits
+        if body.captions is not None:
+            opts["captions"] = body.captions
 
         candidate = ClipCandidate(
             start=row["start_s"], end=row["end_s"],
@@ -1866,8 +1870,14 @@ def create_app(config: dict, settings_path: Path) -> FastAPI:
             rendered, _ = _render_files(
                 source, candidate, segments, prev_dir, config, opts, content_lang
             )
-            out.unlink(missing_ok=True)
-            rendered.rename(out)
+            # The last preview may still be playing in the editor: Windows
+            # refuses deleting or renaming over it (#137), so put the new one
+            # in its place the way the end card does.
+            from video.outro import _replace_with_retry
+
+            if not _replace_with_retry(rendered, out, label="Preview"):
+                raise RuntimeError(f"{out.name} is open elsewhere and could not be written")
+            rendered.unlink(missing_ok=True)
         except Exception as e:
             raise HTTPException(500, f"preview render failed: {str(e)[:400]}")
         import time as _time

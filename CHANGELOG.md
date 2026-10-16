@@ -186,6 +186,20 @@ were often broken in a way that only showed up on somebody else's machine.
 
 ### Fixed
 
+- **Cloud AI keys save again.** In 2.0.0, saving a key for OpenRouter, Gemini, OpenAI or
+  Anthropic failed with an error, because part of the cloud AI support was left out of
+  the installed app. (#135)
+- **Adding a watermark to a clip that is open in the editor works.** It failed with
+  "Access is denied", and **Update preview** with "file in use", because the clip or its
+  last preview was still playing. (#137)
+- **A clip made with captions off stays without them when you edit it.** Its first edit
+  used to burn the captions back in. The editor's **Captions** tab also has a
+  **Captions** on/off switch for each clip now. (#128)
+- **The Generate row remembers the rest of its settings.** The caption style, the
+  **Longform output** you picked from the list, the **Pipeline** and the **Rate &
+  understand** plugins now carry over to the next video and survive a restart, like the
+  other switches already did. (#138)
+
 - **Processing a video again keeps your edits.** **Process again** made every clip it
   found again from the start: cuts, mutes, a layout, captions you fixed, colours,
   branding and title-card words you had applied in the editor stayed in the editor but
