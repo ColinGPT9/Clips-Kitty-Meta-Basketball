@@ -1,3 +1,9 @@
+<div align="center">
+
+**English** · [简体中文](docs/readme/README_zh.md) · [日本語](docs/readme/README_ja.md) · [한국어](docs/readme/README_ko.md) · [Türkçe](docs/readme/README_tr.md) · [Русский](docs/readme/README_ru.md) · [Tiếng Việt](docs/readme/README_vi.md) · [ไทย](docs/readme/README_th.md) · [Deutsch](docs/readme/README_de.md) · [Español](docs/readme/README_es.md) · [Français](docs/readme/README_fr.md) · [Português (Brasil)](docs/readme/README_pt-BR.md) · [العربية](docs/readme/README_ar.md) · [Bahasa Indonesia](docs/readme/README_id.md) · [Italiano](docs/readme/README_it.md) · [हिन्दी](docs/readme/README_hi.md) · [বাংলা](docs/readme/README_bn.md) · [Filipino](docs/readme/README_tl.md) · [اردو](docs/readme/README_ur.md)
+
+</div>
+
 # Clips Kitty: the free, open-source Opus Clip alternative that runs on your own PC
 
 <a href="https://apps.microsoft.com/detail/9NB6XT7DSQZZ">
@@ -921,3 +927,15 @@ your clips are yours.
 point: improvements to a tool built for creators stay available to those creators.
 
 Still built to be modified: swap models, tune prompts, add platforms.
+
+## Star history
+
+Thank you to everyone who stars, shares, reports bugs and translates Clips Kitty.
+
+<a href="https://www.star-history.com/#ColinGPT9/clips-studio&amp;Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=ColinGPT9/clips-studio&amp;type=date&amp;theme=dark&amp;legend=top-left" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=ColinGPT9/clips-studio&amp;type=date&amp;legend=top-left" />
+    <img alt="Clips Kitty GitHub star history" src="https://api.star-history.com/chart?repos=ColinGPT9/clips-studio&amp;type=date" />
+  </picture>
+</a>
