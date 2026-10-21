@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import threading
+import time
 import traceback
 import urllib.error
 from pathlib import Path
@@ -1883,7 +1884,10 @@ def create_app(config: dict, settings_path: Path) -> FastAPI:
 
             if not _replace_with_retry(rendered, out, label="Preview"):
                 raise RuntimeError(f"{out.name} is open elsewhere and could not be written")
-            rendered.unlink(missing_ok=True)
+            # Moved into place, or written into it with the old draft still
+            # playing: what is left is scratch, and on Windows deleting a file
+            # something still holds raises, which would fail a good preview.
+            discard(rendered)
         except Exception as e:
             raise HTTPException(500, f"preview render failed: {str(e)[:400]}")
         import time as _time
@@ -2089,7 +2093,9 @@ def create_app(config: dict, settings_path: Path) -> FastAPI:
         path = (data_dir / "previews" / f"clip_{clip_id}.mp4").resolve()
         if not path.exists():
             raise HTTPException(404, "no draft preview")
-        return FileResponse(path, media_type="video/mp4")
+        # Never from the cache: every draft of a clip is written to the same
+        # file, so a cached one is the draft before (#147).
+        return FileResponse(path, media_type="video/mp4", headers={"Cache-Control": "no-store"})
 
     @app.get("/clips/{clip_id}/words")
     def clip_words(clip_id: int):
@@ -2123,7 +2129,10 @@ def create_app(config: dict, settings_path: Path) -> FastAPI:
         path = Path(row["path"]).resolve()
         if not path.exists() or data_dir not in path.parents:
             raise HTTPException(404, "clip file missing")
-        return FileResponse(path, media_type="video/mp4")
+        # Never from the cache, like the frames: a clip's file can be written
+        # again in place (an end card added later), and what the editor shows
+        # must be the file as it is now (#147).
+        return FileResponse(path, media_type="video/mp4", headers={"Cache-Control": "no-store"})
 
     # ---- multilingual publishing (separate pipeline; see multilingual/) ----
 
@@ -2968,36 +2977,126 @@ def create_app(config: dict, settings_path: Path) -> FastAPI:
         config["llm"]["backend"] = spec  # live config follows the file
         return {"active": spec}
 
+    # Each download's latest state, by tag. The WebSocket events are the live
+    # view, but a window can miss the one that matters: the broadcaster drops
+    # events for a client whose queue is full, and a reconnect leaves a gap.
+    # With nothing to catch up from, a download that had finished or failed
+    # sat at 100% for good (#148, #150). A finished one is kept for a while so
+    # a window can still read how it ended, then forgotten.
+    pulls: dict[str, dict] = {}
+    pulls_lock = threading.Lock()
+    pull_kept_seconds = 600
+
+    def _pull_event(event: dict) -> None:
+        """Send a model_pull event, and keep it as that download's state."""
+        with pulls_lock:
+            state = pulls.get(event["tag"])
+            if state is not None:
+                state["status"] = event["status"]
+                state["completed"] = event.get("completed")
+                state["total"] = event.get("total")
+                if event["status"] in ("done", "error"):
+                    state["done"] = True
+                    state["error"] = event.get("error")
+                    state["ended"] = time.monotonic()
+        broadcaster.publish(event)
+
+    @app.get("/models/pulls")
+    def model_pulls():
+        """Downloads running now, and how the recent ones ended."""
+        now = time.monotonic()
+        with pulls_lock:
+            for tag in [t for t, s in pulls.items() if s["done"] and now - s["ended"] > pull_kept_seconds]:
+                del pulls[tag]
+            return {"pulls": [{k: v for k, v in s.items() if k != "ended"} for s in pulls.values()]}
+
     @app.post("/models/pull")
     def pull_model(body: ModelIn):
+        from llm import pulls as running_pulls
+
+        tag = body.tag
+        with pulls_lock:
+            running = pulls.get(tag)
+            if running is not None and not running["done"]:
+                # A second click, or setup and the Models page both asking for
+                # the model: a second thread would only fetch the same files
+                # again alongside the first.
+                return {"started": tag, "already": True}
+            pulls[tag] = {
+                "tag": tag, "status": "starting", "completed": None, "total": None,
+                "error": None, "done": False,
+            }
+
         def _pull():
+            last = ""
             try:
-                with _requests.post(
-                    f"{ollama_host}/api/pull", json={"model": body.tag}, stream=True, timeout=3600
-                ) as resp:
-                    for line in resp.iter_lines():
-                        if not line:
-                            continue
-                        info = json.loads(line)
-                        # Ollama reports a failed pull (no such model, no
-                        # network, disk full) as a line carrying "error", on a
-                        # stream that then simply ends. Unchecked, the download
-                        # was announced as done with nothing on disk.
-                        if info.get("error"):
-                            raise RuntimeError(info["error"])
-                        broadcaster.publish(
-                            {
-                                "type": "model_pull",
-                                "tag": body.tag,
-                                "status": info.get("status", ""),
-                                "completed": info.get("completed"),
-                                "total": info.get("total"),
-                            }
-                        )
-                _select_if_nothing_usable(body.tag)
-                broadcaster.publish({"type": "model_pull", "tag": body.tag, "status": "done"})
+                try:
+                    with _requests.post(
+                        f"{ollama_host}/api/pull", json={"model": tag}, stream=True, timeout=3600
+                    ) as resp:
+                        for line in resp.iter_lines():
+                            if not line:
+                                continue
+                            info = json.loads(line)
+                            # Ollama reports a failed pull (no such model, no
+                            # network, disk full) as a line carrying "error", on
+                            # a stream that then simply ends. Unchecked, the
+                            # download was announced as done with nothing on disk.
+                            if info.get("error"):
+                                raise RuntimeError(info["error"])
+                            last = info.get("status") or last
+                            _pull_event(
+                                {
+                                    "type": "model_pull",
+                                    "tag": tag,
+                                    "status": info.get("status", ""),
+                                    "completed": info.get("completed"),
+                                    "total": info.get("total"),
+                                }
+                            )
+                except _requests.exceptions.RequestException as e:
+                    # Ollama quitting or crashing part-way (while it checks a
+                    # big download, say), or the connection dropping, cuts the
+                    # stream off, and requests raises from iter_lines. Its own
+                    # words ("Response ended prematurely") don't say that
+                    # trying again carries on rather than starting over.
+                    raise RuntimeError(
+                        f"The download didn't finish (last step: {last or 'connecting to Ollama'}). "
+                        "Try again; it carries on where it stopped."
+                    ) from e
+                # Ollama ends a pull that worked with "success". A stream that
+                # ends cleanly before it is not a download either, however far
+                # the percentage got.
+                if last != "success":
+                    step = f"last step: {last}" if last else "Ollama sent nothing back"
+                    raise RuntimeError(
+                        f"The download didn't finish ({step}). Try again; it carries on where it stopped."
+                    )
+                if not _listed(tag):
+                    raise RuntimeError(
+                        f"Ollama said the download finished, but {tag} isn't in its list of models. Try again."
+                    )
+                _select_if_nothing_usable(tag)
+                _pull_event({"type": "model_pull", "tag": tag, "status": "done"})
             except Exception as e:
-                broadcaster.publish({"type": "model_pull", "tag": body.tag, "status": "error", "error": str(e)})
+                _pull_event({"type": "model_pull", "tag": tag, "status": "error", "error": str(e) or type(e).__name__})
+            finally:
+                running_pulls.finished(tag)
+
+        def _listed(tag: str) -> bool:
+            """Whether Ollama now lists the model. Checked before the download
+            is called done, because a tag that isn't there, once selected,
+            fails every job with a 404 from Ollama."""
+            from llm.manager import installed_models, model_is_installed
+
+            try:
+                names = [m["name"] for m in installed_models(ollama_host)]
+            except Exception:
+                return False
+            # model_is_installed drops everything up to the last "/", which is
+            # right for "ollama/gemma:7b" but not for a tag such as
+            # "hf.co/user/repo:Q4_K_M", which Ollama lists in full.
+            return tag in names or f"{tag}:latest" in names or model_is_installed(tag, names)
 
         def _select_if_nothing_usable(tag: str) -> None:
             """Make the download count as a choice when nothing else can run.
@@ -3027,8 +3126,12 @@ def create_app(config: dict, settings_path: Path) -> FastAPI:
                 # is on disk either way, and the Models page can still select it.
                 pass
 
+        # Recorded before the thread starts, not in it: a job queued the moment
+        # this returns (setup says to carry on while the model downloads) must
+        # already see that its model is on the way.
+        running_pulls.started(tag)
         threading.Thread(target=_pull, daemon=True).start()
-        return {"started": body.tag}
+        return {"started": tag}
 
     @app.delete("/models/{tag:path}")
     def delete_model(tag: str):

@@ -172,11 +172,11 @@ class Worker(threading.Thread):
                 # video "keeps getting cancelled" though nobody pressed cancel.
                 # Any real cancel of this run re-sets the flag after this point.
                 cancel.clear(vid)
-                # Never race a half-written prefetch of THIS video; once it's
-                # settled, kick off the download of the NEXT queued video so
-                # it overlaps this job's GPU work.
-                self.prefetch.wait_for(vid)
-            self.prefetch.maybe_start(db)
+            else:
+                # A render or a translation downloads nothing, so the next
+                # queued video's download starts beside it at once. A process
+                # job starts it only once it has passed its checks (below).
+                self.prefetch.maybe_start(db)
             try:
                 if job["type"] == "process":
                     from core.pipeline import process_video
@@ -191,7 +191,18 @@ class Worker(threading.Thread):
                     # across future edits. Copying a settings dict costs
                     # microseconds against an hour of video work.
                     cfg = copy.deepcopy(self.config)
+                    # Checked before anything is downloaded, the next queued
+                    # video included. A job failing here used to start that
+                    # download on its way out, and the next job waited for the
+                    # whole video only to fail the same check: a batch with no
+                    # model downloaded every video in it.
                     self._check_plan(db, cfg, payload)
+                    self._check_local_model(db, vid, cfg["llm"], payload)
+                    # Never race a half-written prefetch of THIS video; once it's
+                    # settled, kick off the download of the NEXT queued video so
+                    # it overlaps this job's GPU work.
+                    self.prefetch.wait_for(vid)
+                    self.prefetch.maybe_start(db)
                     if payload.get("podcast"):
                         # Multi-cam podcast: letterbox every clip, no tracking.
                         cfg["clips"]["podcast"] = True
@@ -306,8 +317,11 @@ class Worker(threading.Thread):
                 # A cloud provider's error is already written without the key;
                 # this is the net for anything else that might echo one.
                 from core.scrub import scrub_secrets
+                from llm.providers.base import LLMError
 
-                message = scrub_secrets(str(e))
+                # An AI failure is already in words a creator can act on, so
+                # its message is stored as it is, as /agent/chat shows it.
+                message = scrub_secrets(e.message if isinstance(e, LLMError) else str(e))
                 db.finish_job(job["id"], "failed", message[:2000])
                 self._announce(db, job, "failed", message[:500])
             finally:
@@ -674,6 +688,61 @@ class Worker(threading.Thread):
         cfg["llm"]["plan_automation"] = db.get_flag(signin.AUTOMATION_FLAG + plan.id) == "1"
         plan.check_job(cfg["llm"])
 
+    @staticmethod
+    def _check_local_model(db: StateDB, vid: str | None, llm_cfg: dict, payload: dict) -> None:
+        """A job on a local model is checked before anything is downloaded:
+        if Ollama answers and has no model at all to run it on, the job ends
+        now, saying so, rather than after the download and the transcription
+        with Ollama's bare 404 (#149). Raises LLMError in plain words then.
+
+        Nothing else stops a job here. Ollama not answering (or still
+        starting) is reported where it always was, a configured model that's
+        missing while another is installed is swapped for that one by
+        core.pipeline._with_usable_model, as it always was, and so is one
+        still downloading by the time the job needs it."""
+        from llm import pulls
+        from llm.manager import installed_models, missing_model, usable_model_in
+        from llm.spec import is_local
+
+        if payload.get("pipeline") and not payload.get("longform"):
+            # A plugin pipeline finds the Shorts' moments itself. The AI only
+            # writes their titles, and those fall back to plain ones without
+            # it: such a job finishes with no model at all.
+            return
+        spec = llm_cfg.get("backend") or ""
+        if not is_local(spec):
+            return
+        longform = payload.get("longform") or {}
+        if longform.get("mode") == "edited_stream":
+            # Edited Stream only cuts the silence and the AFK stretches, with a
+            # fixed title (longform/process.py): no AI at all. Only its "also
+            # make 9:16 Shorts" needs one, and not when they were made before.
+            made = vid and not payload.get("force") and db.shorts_made(vid)
+            if not longform.get("shorts") or made:
+                return
+        if (vid and not payload.get("longform") and not payload.get("force")
+                and db.shorts_made(vid)):
+            # Its Shorts were made before and nobody asked for them again:
+            # process_video stops before the AI is needed, and the job ends
+            # as done with no model at all, as it always did.
+            return
+        try:
+            installed = [m["name"] for m in installed_models(
+                llm_cfg.get("ollama_host", "http://localhost:11434"), timeout=5)]
+        except Exception:
+            return
+        configured = spec.split("/")[-1]
+        if usable_model_in(configured, installed) is not None:
+            return
+        if pulls.running():
+            # Ollama lists nothing until a download is complete, and setup
+            # tells a new user to carry on while the recommended model
+            # downloads. The job goes ahead: by the time it needs the AI,
+            # after its own download and the transcription,
+            # _with_usable_model finds the model that arrived meanwhile.
+            return
+        raise missing_model(configured)
+
     def _span(self, job_id: int) -> tuple[float, float] | None:
         with self._progress_lock:
             entry = self._progress.get(job_id)
@@ -896,6 +965,14 @@ class Worker(threading.Thread):
                   "dependent row(s)")
         if rendered and old_path and old_path.exists() and old_path != rendered.path:
             discard(old_path)
+        # The editor's draft of the clip (POST /clips/{id}/preview) is filed
+        # under the old id, which nothing will ask for again.
+        discard(data_dir / "previews" / f"clip_{int(clip['id'])}.mp4")
+        if new_row:
+            # The editor has the clip open by its old id; told the new one, it
+            # follows the clip instead of losing it (#147).
+            broadcaster.publish({"type": "clip_replaced", "old": clip["id"], "new": new_row["id"],
+                                 "video_id": video_id})
 
 
 def _mark_suggestions(candidate, payload: dict, saved: dict, rendered: dict, window: tuple,

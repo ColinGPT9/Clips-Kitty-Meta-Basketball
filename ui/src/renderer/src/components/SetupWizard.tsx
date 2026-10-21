@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api } from '../lib/api'
+import { api, errorText } from '../lib/api'
+import { isChecking, pullPercent, pullStep } from '../lib/modelPull'
 import { useEvents } from '../lib/useEvents'
-import type { Preflight, PreflightCheck, SystemStats } from '../lib/types'
+import type { ModelPull, Preflight, PreflightCheck, SystemStats } from '../lib/types'
 import OpenRouterPrompt from './OpenRouterPrompt'
 
 const DONE_KEY = 'setup-wizard-done'
@@ -75,9 +76,13 @@ export default function SetupWizard({ onClose }: { onClose: () => void }): JSX.E
   const [checking, setChecking] = useState(false)
   const [pullStatus, setPullStatus] = useState<string | null>(null)
   const [pullPct, setPullPct] = useState<number | null>(null)
+  // While true the window keeps asking the engine how the download is going,
+  // in case the events miss its end (see catchUp).
+  const [pullRunning, setPullRunning] = useState(false)
+  const [canRetry, setCanRetry] = useState(false)
   const [error, setError] = useState('')
 
-  const refresh = useCallback(async (): Promise<void> => {
+  const refresh = useCallback(async (): Promise<Preflight | null> => {
     setChecking(true)
     setError('')
     try {
@@ -92,10 +97,12 @@ export default function SetupWizard({ onClose }: { onClose: () => void }): JSX.E
       setPre(p)
       if (s) setStats(s)
       if (m?.recommended) setRec(m.recommended)
+      return p
     } catch (e) {
       setError(
         'Could not reach the Clips Kitty engine. If you just installed, give it a few seconds and try again.'
       )
+      return null
     } finally {
       setChecking(false)
     }
@@ -104,21 +111,6 @@ export default function SetupWizard({ onClose }: { onClose: () => void }): JSX.E
   useEffect(() => {
     void refresh()
   }, [refresh])
-
-  useEvents((e) => {
-    if (e.type !== 'model_pull') return
-    if (e.status === 'done') {
-      setPullStatus('Downloaded')
-      setPullPct(100)
-      void refresh()
-    } else if (e.status === 'error') {
-      setPullStatus(`Download failed: ${e.error ?? 'unknown error'}`)
-      setPullPct(null)
-    } else {
-      setPullStatus(e.status ?? 'downloading')
-      setPullPct(e.completed && e.total ? Math.round((e.completed / e.total) * 100) : null)
-    }
-  })
 
   const check = (name: string): PreflightCheck | undefined =>
     pre?.checks.find((c) => c.name === name)
@@ -129,25 +121,133 @@ export default function SetupWizard({ onClose }: { onClose: () => void }): JSX.E
   // asked for one" is not something the render state can be trusted for —
   // re-entering the step would queue a second download of the same model.
   const pullStarted = useRef(false)
+  // True once the engine has said it is running the download: its POST
+  // returned, or its record listed it. Only then does a record gone missing
+  // mean the download stopped; before, a look can simply have beaten the POST.
+  const pullKnown = useRef(false)
+
+  const failed = useCallback((text: string): void => {
+    setPullStatus(text)
+    setPullPct(null)
+    setPullRunning(false)
+    setCanRetry(true)
+    pullStarted.current = false // so Try again actually tries again
+    pullKnown.current = false
+  }, [])
+
+  // One download's state, from an event or from the engine's own record. Only
+  // the recommended model's: this window shows one download, and the Models
+  // page may be fetching another.
+  const showPull = useCallback(
+    (p: { status?: string; completed?: number | null; total?: number | null; error?: string | null }): void => {
+      if (p.status === 'done') {
+        setPullStatus('Downloaded')
+        setPullPct(100)
+        setPullRunning(false)
+        pullStarted.current = false
+        pullKnown.current = false
+        // "done" means Ollama has the model, so setup should now find one it
+        // can run. If it still doesn't, the download didn't really finish,
+        // and saying "Downloaded" over a missing model is the bug this is
+        // here for. No model check at all means a cloud AI is chosen.
+        void refresh().then((latest) => {
+          const model = latest?.checks.find((c) => c.name === 'model')
+          if (model && !model.ok) failed("The download didn't finish. Try again; it carries on where it stopped.")
+        })
+      } else if (p.status === 'error') {
+        failed(`Download failed: ${p.error || 'unknown error'}`)
+      } else {
+        const checkingIt = isChecking(p.status)
+        setPullStatus(pullStep(p.status))
+        setPullPct(checkingIt ? null : pullPercent(p.completed, p.total))
+        setPullRunning(true)
+        setCanRetry(false)
+        pullStarted.current = true
+      }
+    },
+    [refresh, failed]
+  )
+
+  const recModel = rec?.model
+  useEvents((e) => {
+    if (e.type !== 'model_pull' || !recModel || e.tag !== recModel) return
+    showPull(e)
+  })
+
+  // The events can miss the one that matters (a reconnect, or a window that
+  // fell behind), which left the bar at its last percentage for good. So the
+  // engine's own record is read when the window opens and every few seconds
+  // while the download runs.
+  const catchUp = useCallback(async (): Promise<void> => {
+    if (!recModel) return
+    let mine: ModelPull | undefined
+    try {
+      const { pulls } = await api.pullStatus()
+      mine = pulls.find((p) => p.tag === recModel)
+    } catch {
+      return // engine not answering: the next look, or an event, will say
+    }
+    if (mine) {
+      if (!mine.done) pullKnown.current = true
+      showPull(mine)
+      return
+    }
+    if (!pullKnown.current) return
+    // The engine has no record of a download it said it was running: it was
+    // restarted, and its downloads went with it. The Models page drops such a
+    // download; here the bar sat at its last percentage, asking every few
+    // seconds, for good. Unless the model got in first, it stopped.
+    const latest = await refresh()
+    if (!latest) return // not answering now: the next look tries again
+    const model = latest.checks.find((c) => c.name === 'model')
+    if (model && !model.ok) {
+      failed('The download stopped. Try again; it carries on where it stopped.')
+    } else {
+      setPullRunning(false)
+      pullStarted.current = false
+      pullKnown.current = false
+    }
+  }, [recModel, showPull, refresh, failed])
+
+  useEffect(() => {
+    void catchUp()
+  }, [catchUp])
+
+  useEffect(() => {
+    if (!pullRunning) return
+    const timer = setInterval(() => void catchUp(), 3000)
+    return () => clearInterval(timer)
+  }, [pullRunning, catchUp])
 
   const startPull = useCallback(async (): Promise<void> => {
     if (!rec || pullStarted.current) return
     pullStarted.current = true
-    setPullStatus('starting…')
+    setCanRetry(false)
+    setPullRunning(true)
+    setPullStatus(pullStep('starting'))
     setPullPct(null)
+    pullKnown.current = false
     try {
       await api.pullModel(rec.model)
     } catch (e) {
-      setPullStatus(`Could not start: ${e instanceof Error ? e.message : e}`)
-      pullStarted.current = false // so Try again actually tries again
+      failed(`Could not start: ${errorText(e)}`)
+      return
     }
-  }, [rec])
+    // Unless it has already ended: a "done" or "error" in before the POST
+    // came back has settled it, and a missing record then means nothing.
+    if (pullStarted.current) pullKnown.current = true
+  }, [rec, failed])
 
   // Start the download the moment the setup step opens. Nobody installs a
   // clipping app in order to choose a language model, and the one worth having
   // is decided by their graphics card — which the server already knows.
+  // Once only: after a failure the next try is the Try again button, or a
+  // download that keeps failing would start itself again on every check.
+  const autoStarted = useRef(false)
   useEffect(() => {
-    if (step === 1 && ollamaOk && rec && !modelOk) void startPull()
+    if (step !== 1 || !ollamaOk || !rec || modelOk || autoStarted.current) return
+    autoStarted.current = true
+    void startPull()
   }, [step, ollamaOk, rec, modelOk, startPull])
 
   const finish = (): void => {
@@ -267,8 +367,8 @@ export default function SetupWizard({ onClose }: { onClose: () => void }): JSX.E
                           leave this window open, or carry on and let it finish in the
                           background.
                         </p>
-                        {!pullStarted.current && (
-                          <button className="btn-ghost !py-1.5 mt-2" onClick={startPull}>
+                        {canRetry && (
+                          <button className="btn-ghost !py-1.5 mt-2" onClick={() => void startPull()}>
                             Try again
                           </button>
                         )}

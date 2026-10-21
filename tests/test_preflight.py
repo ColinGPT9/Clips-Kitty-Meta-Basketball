@@ -202,6 +202,91 @@ def test_an_installed_model_is_left_alone(monkeypatch):
     assert _with_usable_model(cfg)["backend"] == "ollama/gemma3:12b"
 
 
+@pytest.mark.parametrize(
+    "configured, installed, expected",
+    [
+        ("gemma3", ["gemma3:12b"], "gemma3:12b"),
+        ("ollama/gemma3", ["gemma3:12b"], "gemma3:12b"),
+        ("gemma3", ["gemma3:12b", "gemma3:latest"], "gemma3:latest"),  # what Ollama loads for "gemma3"
+        ("gemma3:12b", ["gemma3:4b", "gemma3:12b"], "gemma3:12b"),
+        ("ollama/gemma:7b", ["qwen3:8b", "gemma:7b"], "gemma:7b"),
+    ],
+)
+def test_the_model_resolved_is_always_one_ollama_listed(monkeypatch, configured, installed, expected):
+    """#149: a family in settings ("gemma3") came back as itself, the bare
+    family. Ollama reads that as gemma3:latest, which wasn't pulled, and the
+    job ended in a 404 after the download and the transcription."""
+    from llm.manager import resolve_usable_model
+
+    _ollama_with(monkeypatch, installed)
+    assert resolve_usable_model("http://localhost:11434", configured) == expected
+
+
+@pytest.mark.parametrize("installed", [["gemma3:27b", "gemma3:4b"], ["gemma3:4b", "gemma3:27b"]])
+def test_a_family_takes_its_smallest_recommended_member_whatever_was_pulled_last(monkeypatch, installed):
+    """Ollama lists the most recently pulled first. Taking its first member of
+    the family gave a small card the 27b whenever that was pulled second."""
+    from llm.manager import resolve_usable_model
+
+    _ollama_with(monkeypatch, installed)
+    assert resolve_usable_model("http://localhost:11434", "gemma3") == "gemma3:4b"
+
+
+def test_a_family_the_recommendations_dont_list_still_loads_a_member(monkeypatch):
+    from llm.manager import resolve_usable_model
+
+    _ollama_with(monkeypatch, ["mistral-nemo:12b", "qwen3:14b", "qwen3:8b"])
+    # Not in the recommendations: the first one Ollama lists, as the docstring says.
+    assert resolve_usable_model("http://localhost:11434", "qwen3") == "qwen3:14b"
+
+
+def test_the_check_names_the_model_a_job_will_load(monkeypatch):
+    """With a family in settings the check said "gemma3 installed", while a
+    job loaded gemma3:12b, and before #149 that same bare name was the 404."""
+    _ollama_with(monkeypatch, ["gemma3:12b"])
+    model = preflight.check_ollama("http://localhost:11434", "gemma3")[1]
+    assert model.ok is True
+    assert model.detail == "gemma3:12b installed"
+
+
+@pytest.mark.parametrize(
+    "installed, expected",
+    [
+        (["qwen3:8b", "gemma3:12b", "gemma3:4b"], "gemma3:4b"),  # first in RECOMMENDATIONS
+        (["qwen3:8b", "mistral-nemo:12b"], "qwen3:8b"),          # none of them: Ollama's first
+        ([], None),
+    ],
+)
+def test_a_missing_choice_still_falls_back_as_before(monkeypatch, installed, expected):
+    from llm.manager import resolve_usable_model
+
+    _ollama_with(monkeypatch, installed)
+    assert resolve_usable_model("http://localhost:11434", "gemma:7b") == expected
+
+
+def test_a_family_in_settings_loads_the_model_ollama_has(monkeypatch):
+    pytest.importorskip("numpy", reason="core.pipeline imports numpy, which CI does not install")
+    from core.pipeline import _with_usable_model
+
+    monkeypatch.setattr(
+        "llm.manager.installed_models",
+        lambda host: [{"name": "gemma3:12b", "size_gb": 8.1}],
+    )
+    assert _with_usable_model({"backend": "ollama/gemma3"})["backend"] == "ollama/gemma3:12b"
+
+
+def test_a_family_installed_as_latest_is_left_as_it_is(monkeypatch, capsys):
+    """Ollama loads a bare family name as ":latest": the same model, so the
+    job's log doesn't say it isn't installed."""
+    pytest.importorskip("numpy", reason="core.pipeline imports numpy, which CI does not install")
+    from core.pipeline import _with_usable_model
+
+    monkeypatch.setattr("llm.manager.installed_models", lambda host: [{"name": "gemma3:latest", "size_gb": 3.3}])
+    cfg = {"backend": "ollama/gemma3"}
+    assert _with_usable_model(cfg) is cfg
+    assert "not installed" not in capsys.readouterr().out
+
+
 def test_absent_whisper_weights_warn_without_blocking(monkeypatch):
     """The silent failure this check exists for. faster-whisper can still
     fetch the weights and produce a correct transcript, so refusing to run
