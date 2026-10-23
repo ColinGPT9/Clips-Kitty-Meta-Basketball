@@ -8,6 +8,37 @@ were often broken in a way that only showed up on somebody else's machine.
 
 ---
 
+## Unreleased
+
+Clips are framed and chosen in two new ways, on for everyone. Either can be turned off
+with one line in your settings file: `%LOCALAPPDATA%\Clips Studio\settings.yaml` in the
+installed app (`config/settings.yaml` if you run Clips Kitty from its code). Restart Clips
+Kitty after you change it.
+
+### Changed
+
+- **Framing follows the cut, and a clip opens on the person's face.** In an edited video,
+  a new shot could open framed on where the last shot's person stood, and move to the new
+  person only about a second later, and many cuts were missed or caught a few frames late.
+  Now cuts are found to the frame, and the crop moves to the person in the new shot on the
+  cut itself. A clip usually opens on the person's face, where it used to open on their
+  body and slide over to the face during the first second. A shot with nobody in it opens
+  on the centre (or keeps the last framing, with `shot_aware_no_subject: hold` under
+  `tracking:`) until someone clearly visible appears. Framing takes about a third longer
+  on a video with many cuts, and a little longer on handheld footage. It changes the
+  standard crop only: Podcast, Gaming / Reaction layouts and Sports frame their own way and
+  are unchanged. To frame as before, add the line `shot_aware: false` under `tracking:`.
+- **Clip selection 2.** The moments found from the sound, the picture and chat are scored
+  by your AI model eight at a time, so they no longer all fall back to a flat 50 when a
+  local model runs out of room scoring them at once. A long video's later moments are no
+  longer crowded out by its first half, and a transcript pick scored below your minimum
+  score no longer hides a moment it overlaps. A clip's start no longer skips past the line
+  it was picked for, and a clip that would start partway into a sentence goes back to where
+  the sentence begins, up to 8 seconds earlier. Videos scored as gaming (Gaming / Reaction,
+  or Vertical Live's Gaming / reaction choice) and Sports matches choose clips as before,
+  and so does Longform unless you add `longform_selection: 2` under `scoring:`. To choose
+  clips as before, add the line `selection: 1` under `scoring:`.
+
 ## 2.1.0: Basketball, and a Marketplace for new pipelines
 
 Basketball joins Soccer under Sports, and the new Marketplace installs pipelines and
