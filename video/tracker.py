@@ -73,11 +73,12 @@ from video.cuts import ShotCuts
 # detection, "commit to one subject", and hold-then-move all apply here too.
 from video.framing import HoldMove, is_cut, small_gray, stable_target
 
-# Cut threshold for SAMPLE-grid detection. Adjacent frames barely move so the
-# podcast path uses the shared default (~25); across a sample gap ordinary
-# motion is much larger (a fast stream pan peaks near 40), so streams need a
-# higher bar to avoid false cuts — only a genuine hard scene change (75+)
-# should snap the crop and reset the talking detector.
+# Cut threshold for SAMPLE-grid detection. Adjacent frames barely move (the
+# shared default, video/framing.py's CUT_DIFF, is ~25); across a sample gap
+# ordinary motion is much larger (a fast stream pan peaks near 40), so streams
+# need a higher bar to avoid false cuts — only a genuine hard scene change
+# (75+) should snap the crop and reset the talking detector. Shot-aware
+# framing and video/podcast.py use it only as ShotCuts' fallback.
 _CUT_DIFF_SAMPLED = 55.0
 
 _model = None  # loaded once per process; YOLO init is expensive
@@ -456,14 +457,23 @@ def _mouth_patch(frame, box, size: int):
     return cv2.resize(patch, (size, size))
 
 
-def _contested_spans(mask, fps: int, n: int) -> list:
+def _contested_spans(mask, fps: int, n: int, window: int | None = None) -> list:
     """The stretches worth scoring, as (start, end) frame indices.
 
     `mask` marks frames where two or more people are on screen. Runs shorter
     than a second are grown to a second and near neighbours are merged,
     because the model's shortest window is a second and a run of six frames
     would otherwise be scored on padding.
+
+    `window`, when given, takes the place of `fps` throughout: the shortest
+    stretch, and the gap that joins two. Only the podcast path sets it, to 26:
+    asd.score_track returns all zeros for a stretch of exactly 25 frames (the
+    audio of N frames gives N - 1 frames of MFCCs, under its one-second
+    minimum), so every stretch grown to 25 gets no verdict. Left at None it is
+    `fps`, as the stream tracker has always had it.
     """
+    if window is not None:
+        fps = window
     idx = np.flatnonzero(mask)
     if idx.size == 0:
         return []
@@ -523,7 +533,8 @@ def _asd_speakers(clip_path: Path, samples: list, video_fps: float) -> list | No
 
 
 def score_faces(clip_path: Path, seen_by_track: dict, duration: float,
-                video_fps: float):
+                video_fps: float, *, max_tracks: int | None = None,
+                min_faces: int | None = None, window: int | None = None):
     """How strongly each tracked face is speaking, at 25fps, from TalkNet.
 
     `seen_by_track` is {track_id: [(t, (x1, y1, x2, y2)), ...]} — where each
@@ -544,19 +555,29 @@ def score_faces(clip_path: Path, seen_by_track: dict, duration: float,
     already found and interpolating them onto a 25fps grid adds about 15% to a
     clip; re-detecting at 25fps adds 452%. Do not "simplify" this into a
     second detection pass.
+
+    The keyword arguments are the podcast path's, which scores one shot at a
+    time (video/podcast.py): `max_tracks` and `min_faces` take the place of
+    _ASD_MAX_TRACKS and _ASD_MIN_FACE_SAMPLES, and `window` is
+    _contested_spans' shortest stretch. Left at None, each is what the stream
+    tracker has always used.
     """
     from video import asd
 
     if not asd.available() or not seen_by_track:
         return None
 
-    candidates = [t for t, v in seen_by_track.items() if len(v) >= _ASD_MIN_FACE_SAMPLES]
+    if min_faces is None:
+        min_faces = _ASD_MIN_FACE_SAMPLES
+    if max_tracks is None:
+        max_tracks = _ASD_MAX_TRACKS
+    candidates = [t for t, v in seen_by_track.items() if len(v) >= min_faces]
     if len(candidates) < 2:
         return None
     # Most-seen first, so a capped list keeps the people who are actually in
     # the clip rather than whoever the tracker noticed first.
     candidates.sort(key=lambda t: -len(seen_by_track[t]))
-    candidates = candidates[:_ASD_MAX_TRACKS]
+    candidates = candidates[:max_tracks]
 
     pcm = _clip_pcm(clip_path, asd.AUDIO_SR)
     if pcm is None or pcm.size < asd.AUDIO_SR // 4:
@@ -579,7 +600,7 @@ def score_faces(clip_path: Path, seen_by_track: dict, duration: float,
     # This is the same skip as the "fewer than two faces" one above, measured
     # per moment instead of per clip — not a guess about who is speaking.
     together = np.sum(list(present.values()), axis=0) >= 2
-    spans = _contested_spans(together, asd.FPS, n_frames)
+    spans = _contested_spans(together, asd.FPS, n_frames, window)
     if not spans:
         return None
 
