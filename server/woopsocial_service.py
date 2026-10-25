@@ -10,10 +10,11 @@ The API key goes through core/secrets.py, not into the settings blob.
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from core import secrets
+from server import posts
 
 SETTINGS_KEY = "woopsocial"
 KEY_SECRET = "woopsocial_key"
@@ -135,29 +136,65 @@ def tags_of(clip) -> list[str]:
     return out
 
 
-def record_outcomes(db, clip_id: int, clip, result, *, scheduled_for: str = "") -> None:
-    """Write one row per platform for a finished fan-out.
+def record_outcomes(db, clip_id: int, clip, result, *, scheduled_for: str = "",
+                    caption="", visibility="") -> None:
+    """Write one row per platform for a fan-out that was just sent.
 
-    `scheduled_for` is when the post is actually due. It is kept because a run
-    spread over days is otherwise invisible: the app sent the times and then
-    forgot them, so the only way to see the plan was the provider's own site.
-    Empty on a refresh, which learns states rather than setting times.
+    Publish time only: this is what the post IS. The identity (video_id and
+    the window) is written only while the clip row exists, never blanked.
+    `scheduled_for` is when the post is actually due ('' for now). It is kept
+    because a run spread over days is otherwise invisible: the app sent the
+    times and then forgot them, so the only way to see the plan was the
+    provider's own site. `caption` is the text that went out and `visibility`
+    the one asked for; either may be one value or {platform: value}.
+
+    A later status check goes through record_refresh, which learns states and
+    links and leaves all of this alone. This is a send, so the row's clock
+    starts again (created_at): a clip sent again to a platform is due from
+    this send, not the first one.
     """
+    sent = posts.sent_stamp()
     for outcome in result.outcomes:
         fields = {
             "provider": "woopsocial",
-            "video_id": (clip["video_id"] if clip is not None else "") or "",
-            "start_s": (clip["start_s"] if clip is not None else 0) or 0,
-            "end_s": (clip["end_s"] if clip is not None else 0) or 0,
+            "created_at": sent,
             "state": outcome.state,
             "post_id": outcome.post_id,
             "post_url": outcome.post_url,
             "error": outcome.error,
             "request_id": result.request_id,
+            "scheduled_for": scheduled_for or "",
+            "caption": posts.for_platform(caption, outcome.platform),
+            "visibility": posts.for_platform(visibility, outcome.platform),
         }
-        if scheduled_for:
-            fields["scheduled_for"] = scheduled_for
+        if clip is not None:
+            fields["video_id"] = clip["video_id"] or ""
+            fields["start_s"] = clip["start_s"] or 0
+            fields["end_s"] = clip["end_s"] or 0
         db.record_clip_publish(clip_id, outcome.platform, fields)
+
+
+def record_refresh(db, clip_id: int, result, *, known=None) -> int:
+    """Write what a status check learned: state, ids, link and error only.
+
+    The row's clip_id may by now be a re-rendered clip with a different
+    window (StateDB.follow_clip_id), so a refresh must never write the post's
+    identity, caption or time: those describe the post that went out.
+
+    With `known`, the request's rows as stored, an outcome that only repeats
+    its row is not written, nor one for a platform sent again since under a
+    newer request (server/posts.py news). Returns how many were.
+    """
+    outcomes = result.outcomes if known is None else posts.news(known, result)
+    for outcome in outcomes:
+        db.record_clip_publish(clip_id, outcome.platform, {
+            "state": outcome.state,
+            "post_id": outcome.post_id,
+            "post_url": outcome.post_url,
+            "error": outcome.error,
+            "request_id": result.request_id,
+        })
+    return len(outcomes)
 
 
 def committed_times(db) -> list[str]:
@@ -170,11 +207,13 @@ def committed_times(db) -> list[str]:
 
     Counted: anything still queued or processing with a time on it, and
     anything published today, which has already spent part of today's
-    allowance. Not counted: failures, which hold nothing.
+    allowance. Not counted: failures, which hold nothing, and other providers'
+    posts, which spend their own allowance rather than WoopSocial's.
     """
     rows = db.conn.execute(
         "SELECT state, scheduled_for, updated_at FROM clip_publishes "
-        "WHERE state IN ('queued', 'processing', 'published', 'sending')"
+        "WHERE state IN ('queued', 'processing', 'published', 'sending') "
+        "AND provider = 'woopsocial'"
     ).fetchall()
     today = datetime.now(timezone.utc).date().isoformat()
     out: list[str] = []
@@ -300,6 +339,7 @@ def publish_clips(
     lead_hashtags: list[str] | None = None,
     ai_hashtags: bool = True,
     day_start: str = "",
+    discord_destination_id: int | None = None,
 ) -> dict:
     """Publish a set of clips, optionally spaced out over time.
 
@@ -450,15 +490,26 @@ def publish_clips(
                 at = datetime.now(tz.utc) + timedelta(minutes=2)
             when = at.isoformat()
 
+        visibility = posts.visibilities("woopsocial", wanted, overrides)
+        if discord_destination_id is not None:
+            from campaigns import post_links
+
+            post_links.prepare(db, destination_id=discord_destination_id, clip_id=clip_id,
+                               platforms=wanted, provider="woopsocial")
         uploaded: list[str] = []
         on_media = None
         if once:
             for platform in wanted:
                 db.record_clip_publish(clip_id, platform, {
-                    "provider": "woopsocial", "video_id": clip["video_id"] or "",
+                    # A send: the row's clock starts again (record_outcomes).
+                    "provider": "woopsocial", "created_at": posts.sent_stamp(),
+                    "video_id": clip["video_id"] or "",
                     "start_s": clip["start_s"] or 0, "end_s": clip["end_s"] or 0,
                     "state": "sending", "post_id": "", "post_url": "", "error": "",
                     "request_id": "", "media_id": "", "scheduled_for": when,
+                    # Kept from the start, so a post reconcile_sending adopts
+                    # later still says what it said.
+                    "caption": text, "visibility": visibility[platform],
                 })
 
             def on_media(media_id, clip_id=clip_id, targets=tuple(wanted), uploaded=uploaded):
@@ -493,7 +544,10 @@ def publish_clips(
             # That row stays "sending" for reconcile_sending to settle.
             continue
 
-        record_outcomes(db, clip_id, clip, result, scheduled_for=when)
+        record_outcomes(db, clip_id, clip, result, scheduled_for=when, caption=text,
+                        visibility=visibility)
+        if discord_destination_id is not None:
+            post_links.recover(db, completed_clip=clip_id, provider="woopsocial")
         started.append(
             {"clip_id": clip_id, "request_id": result.request_id, "scheduled_for": when}
         )
@@ -547,7 +601,9 @@ def reconcile_sending(db, data_dir: Path, *, older_than: float = STALE_SENDING_S
             except PublishError:
                 continue  # unreachable now; a later refresh tries again
         if found is not None and found.outcomes:
-            record_outcomes(db, clip_id, db.get_clip(clip_id), found)
+            # The "sending" row already holds the post's identity, caption and
+            # time; adopting it only learns the post's id and state.
+            record_refresh(db, clip_id, found)
             adopted += 1
             platforms = [p for p in platforms if p not in {o.platform for o in found.outcomes}]
         for platform in platforms:
@@ -556,22 +612,65 @@ def reconcile_sending(db, data_dir: Path, *, older_than: float = STALE_SENDING_S
     return {"adopted": adopted, "failed": failed}
 
 
-def in_flight(db) -> list[str]:
-    """Request ids with at least one destination still unfinished.
+def in_flight(db, provider: str = "woopsocial") -> list[str]:
+    """Request ids with at least one destination still unfinished, newest first.
 
     One id per fan-out, not per row: a 37-clip batch is 37 rows but they were
     accepted as separate posts, so this returns each distinct request once and
     the caller asks about each once.
+
+    Only this provider's: Upload-Post rows carry a request_id too, and asking
+    WoopSocial about one of those can only fail. Filtered in SQL.
     """
     rows = db.conn.execute(
         "SELECT DISTINCT request_id FROM clip_publishes "
-        "WHERE request_id != '' AND state IN ('queued', 'processing') "
-        "ORDER BY created_at DESC"
+        "WHERE request_id != '' AND state IN ('queued', 'processing') AND provider = ? "
+        "ORDER BY created_at DESC",
+        (provider,),
     ).fetchall()
     return [r["request_id"] for r in rows]
 
 
-def refresh_in_flight(db, data_dir: Path, *, limit: int = 60) -> dict:
+#: How far ahead of its time a post is already worth asking about.
+DUE_AHEAD_SECONDS = 120
+
+
+def due_in_flight(db, *, now=None, provider: str = "woopsocial") -> list[str]:
+    """The in-flight requests that are due, oldest-due first.
+
+    A watch spreads its clips over days, so the newest requests are the ones
+    due last: checking those first left a day-one post unchecked for a week.
+    A request is due at the earliest due time of its rows (server/posts.py);
+    one due more than two minutes from now is left out, since there is
+    nothing to learn about a post that has not gone out yet, and so is one
+    due more than 14 days ago, as Upload-Post's are (posts.FOLLOW_DAYS).
+    """
+    current = posts.as_utc(now)
+    rows = db.conn.execute(
+        "SELECT request_id, created_at, scheduled_for FROM clip_publishes "
+        "WHERE request_id != '' AND state IN ('queued', 'processing') AND provider = ?",
+        (provider,),
+    ).fetchall()
+    earliest: dict = {}
+    for row in rows:
+        due = posts.due_time(row, now=current)
+        request_id = row["request_id"]
+        if request_id not in earliest or due < earliest[request_id]:
+            earliest[request_id] = due
+    horizon = current + timedelta(seconds=DUE_AHEAD_SECONDS)
+    oldest = current - timedelta(days=posts.FOLLOW_DAYS)
+    due_now = [(due, rid) for rid, due in earliest.items() if oldest <= due <= horizon]
+    return [rid for _, rid in sorted(due_now)]
+
+
+#: Request id -> unix time the background refresh last asked about it. In
+#: memory only, like the worker's Upload-Post check times: after a restart
+#: every due request is new again.
+_last_checked: dict[str, float] = {}
+
+
+def refresh_in_flight(db, data_dir: Path, *, limit: int = 60, ids=None, now=None,
+                      last_checked: dict | None = None) -> dict:
     """Ask WoopSocial what became of everything still in the air.
 
     Nothing did this before, so a batch stayed at "processing" forever: the
@@ -579,13 +678,33 @@ def refresh_in_flight(db, data_dir: Path, *, limit: int = 60) -> dict:
     again, which left no way to tell a slow queue from a failure. That is the
     whole reason this exists.
 
+    Without `ids` it checks the requests that are due (due_in_flight), the
+    ones never asked about first, oldest-due first, then the ones asked about
+    longest ago. Requests whose check keeps failing (a post deleted on
+    WoopSocial answers 404 for good) stay in flight, and with more than
+    `limit` of them a plain oldest-first pick would ask only about those,
+    every pass, and never about a post that came due after them. The check
+    times live in `last_checked` (the module's own when not given). A caller
+    that wants particular requests names them in `ids`.
+
     Failures are counted, not raised. A refresh is a read; one unreachable
     request must not stop the rest being updated.
     """
     from publish.errors import PublishError
     from publish.woopsocial import WoopSocialPublisher
 
-    ids = in_flight(db)[:limit]
+    current = posts.as_utc(now)
+    checked = None
+    if ids is None:
+        checked = _last_checked if last_checked is None else last_checked
+        due = due_in_flight(db, now=current)
+        keep = set(due)
+        for gone in [r for r in list(checked) if r not in keep]:
+            checked.pop(gone, None)
+        # sorted() is stable: among requests asked about equally long ago,
+        # due_in_flight's oldest-due order stands.
+        ids = sorted(due, key=lambda r: checked.get(r, 0.0))
+    ids = list(ids)[:limit]
     if not ids:
         return {"checked": 0, "updated": 0, "still_waiting": 0, "failed": 0}
 
@@ -594,6 +713,8 @@ def refresh_in_flight(db, data_dir: Path, *, limit: int = 60) -> dict:
 
     updated = failed = 0
     for request_id in ids:
+        if checked is not None:
+            checked[request_id] = current.timestamp()
         rows = db.publishes_for_request(request_id)
         if not rows:
             continue
@@ -606,8 +727,9 @@ def refresh_in_flight(db, data_dir: Path, *, limit: int = 60) -> dict:
         except Exception:
             failed += 1
             continue
-        if result.outcomes:
-            record_outcomes(db, clip_id, db.get_clip(clip_id), result)
+        # Only what changed is written: a check that repeats the rows leaves
+        # updated_at alone (server/posts.py news).
+        if result.outcomes and record_refresh(db, clip_id, result, known=rows):
             updated += 1
 
     return {
@@ -616,6 +738,13 @@ def refresh_in_flight(db, data_dir: Path, *, limit: int = 60) -> dict:
         "still_waiting": len(in_flight(db)),
         "failed": failed,
     }
+
+
+def refresh_missing_urls(db, data_dir: Path, *, now=None) -> dict:
+    """Ask again about posts WoopSocial called published without a link, for
+    a day after each one was due (server/posts.py missing_url_requests)."""
+    ids = posts.missing_url_requests(db, "woopsocial", now=now)
+    return refresh_in_flight(db, data_dir, ids=ids, now=now)
 
 
 def upcoming(db, *, limit: int = 200) -> list[dict]:

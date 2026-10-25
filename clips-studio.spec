@@ -60,6 +60,8 @@ hiddenimports += collect_submodules("plugins")
 hiddenimports += collect_submodules("connected_accounts")
 hiddenimports += collect_submodules("stream_workflows")
 hiddenimports += collect_submodules("websockets")
+# Clipping campaigns (campaigns/): every import of it sits inside a function.
+hiddenimports += collect_submodules("campaigns")
 # Cloud AI adapters (llm/providers/adapters/): adapter_for imports each by the
 # name its provider spec gives, which the analyser can't follow. 2.0.0 shipped
 # without them and saving any cloud key failed with a 500 (#135).

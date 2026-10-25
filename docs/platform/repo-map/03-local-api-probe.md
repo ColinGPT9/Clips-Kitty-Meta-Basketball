@@ -87,15 +87,15 @@ Wiring (`server/api.py`): `youtube_api.install(` :631, `uploadpost_api.install(`
 authenticated gateway for render workers" (`server/api.py:655-656`) and is NOT on this app, so it is excluded.
 
 Counts (command: `grep -c -E '@app\.(get|post|put|delete|patch|websocket)\(' <file>`):
-86 server/api.py (85 HTTP + the `/ws` websocket at `server/api.py:1428`), 17 server/ai_api.py,
+86 server/api.py (85 HTTP + the `/ws` websocket at `server/api.py:1447`), 17 server/ai_api.py,
 20 server/youtube_api.py, 5 server/integrations.py, 13 server/automation.py, 13 server/uploadpost_api.py,
 13 server/woopsocial_api.py, 9 remote_render/service.py — **176 route decorators, 153 distinct paths**
 (script output: "# 176 route decorators across 8 modules; 153 distinct paths"). `docs/API.md:11` says
 "86 HTTP endpoints and a WebSocket"; that matches `server/api.py` alone, not the whole app.
 
 Tags: NO route decorator passes `tags=`. A `grep -n "tags="` over the eight modules hits only unrelated function
-kwargs (`server/uploadpost_api.py:301` `tags=body.tags`, `:415` `tags=_tags_of(clip)`, `server/automation.py:763-764`
-`lead_hashtags=`/`ai_hashtags=`, `server/woopsocial_api.py:367` `hashtags=`), so every path in a live openapi.json
+kwargs (`server/uploadpost_api.py:302` `tags=body.tags`, `:429` `tags=tags`, `server/automation.py:763-764`
+`lead_hashtags=`/`ai_hashtags=`, `server/woopsocial_api.py:373` `hashtags=`), so every path in a live openapi.json
 would sit under the single implicit "default" tag.
 
 Request schema names (pydantic `BaseModel` subclasses, `grep -n -E "^class \w+\(.*BaseModel\)"`):
@@ -108,16 +108,16 @@ server/ai_api.py: KeyIn:59, TestIn:63, ActivateIn:67, SttCheckIn:72, Transcripti
 server/youtube_api.py: PlanIn:40, PlanItemIn:51, PlanExecuteIn:58, YouTubeSettingsPatch:64, CredentialsIn:75,
 ConnectIn:80, DisconnectIn:87, DefaultAccountIn:91, RenderFirst:95, PublishIn:101, ThumbnailIn:125.
 server/integrations.py: StreamIn:76, LinkIn:86. server/automation.py: PublishSettings:89, AutomationPatch:120,
-WatchIn:127, WatchPatch:140. server/uploadpost_api.py: KeyIn:26, SettingsIn:30, PublishIn:39, BatchIn:57, ConnectIn:69.
-server/woopsocial_api.py: KeyIn:26, SettingsIn:30, ConnectIn:37, BatchIn:41, PublishIn:63.
+WatchIn:127, WatchPatch:140. server/uploadpost_api.py: KeyIn:27, SettingsIn:31, PublishIn:40, BatchIn:58, ConnectIn:70.
+server/woopsocial_api.py: KeyIn:27, SettingsIn:31, ConnectIn:38, BatchIn:42, PublishIn:64.
 (Several names repeat across modules — KeyIn, ConnectIn, PublishIn, BatchIn, SettingsIn — so the live openapi
 component names for those would be disambiguated by FastAPI; no response models are declared via `response_model`
 in the decorators I listed, so response schemas would be untyped.)
 
 Full path list (path, then METHOD (module:line) for each method), from `probe/routes-static.txt`:
 
-    /agent/chat  POST (server/api.py:2686)
-    /agent/status  GET (server/api.py:2626)
+    /agent/chat  POST (server/api.py:2705)
+    /agent/status  GET (server/api.py:2645)
     /ai  GET (server/ai_api.py:227)
     /ai/activate  POST (server/ai_api.py:331)
     /ai/providers/{provider_id}/callback/{state}  GET (server/ai_api.py:269)
@@ -134,53 +134,53 @@ Full path list (path, then METHOD (module:line) for each method), from `probe/ro
     /ai/signin/{provider_id}/start  POST (server/ai_api.py:376)
     /ai/signin/{provider_id}/test  POST (server/ai_api.py:426)
     /ai/transcription  POST (server/ai_api.py:440)
-    /automation  GET (server/automation.py:1011)  PATCH (server/automation.py:1019)
-    /automation/activity  GET (server/automation.py:1034)
-    /automation/items  GET (server/automation.py:1199)
-    /automation/items/{item_id}/publish  POST (server/automation.py:1232)
-    /automation/items/{item_id}/queue  POST (server/automation.py:1208)
-    /automation/items/{item_id}/skip  POST (server/automation.py:1254)
-    /automation/slots  GET (server/automation.py:1077)
-    /automation/watches  GET (server/automation.py:1101)  POST (server/automation.py:1109)
-    /automation/watches/{watch_id}  PATCH (server/automation.py:1144)  DELETE (server/automation.py:1177)
-    /automation/watches/{watch_id}/check  POST (server/automation.py:1188)
-    /branding  GET (server/api.py:2274)  POST (server/api.py:2283)
-    /branding/asset  POST (server/api.py:2312)
-    /branding/asset/{name}  GET (server/api.py:2343)
-    /branding/{profile_id}  PUT (server/api.py:2292)  DELETE (server/api.py:2303)
-    /cancel  POST (server/api.py:1201)
-    /clips/{clip_id}  DELETE (server/api.py:1406)  PATCH (server/api.py:1478)
-    /clips/{clip_id}/ai-edit  POST (server/api.py:1617)
-    /clips/{clip_id}/captions  GET (server/api.py:1545)  PUT (server/api.py:1556)
-    /clips/{clip_id}/creator-gaming-layout  GET (server/api.py:1934)  PUT (server/api.py:1948)
-    /clips/{clip_id}/export  POST (server/api.py:2243)
+    /automation  GET (server/automation.py:1021)  PATCH (server/automation.py:1029)
+    /automation/activity  GET (server/automation.py:1044)
+    /automation/items  GET (server/automation.py:1209)
+    /automation/items/{item_id}/publish  POST (server/automation.py:1242)
+    /automation/items/{item_id}/queue  POST (server/automation.py:1218)
+    /automation/items/{item_id}/skip  POST (server/automation.py:1264)
+    /automation/slots  GET (server/automation.py:1087)
+    /automation/watches  GET (server/automation.py:1111)  POST (server/automation.py:1119)
+    /automation/watches/{watch_id}  PATCH (server/automation.py:1154)  DELETE (server/automation.py:1187)
+    /automation/watches/{watch_id}/check  POST (server/automation.py:1198)
+    /branding  GET (server/api.py:2293)  POST (server/api.py:2302)
+    /branding/asset  POST (server/api.py:2331)
+    /branding/asset/{name}  GET (server/api.py:2362)
+    /branding/{profile_id}  PUT (server/api.py:2311)  DELETE (server/api.py:2322)
+    /cancel  POST (server/api.py:1220)
+    /clips/{clip_id}  DELETE (server/api.py:1425)  PATCH (server/api.py:1497)
+    /clips/{clip_id}/ai-edit  POST (server/api.py:1636)
+    /clips/{clip_id}/captions  GET (server/api.py:1564)  PUT (server/api.py:1575)
+    /clips/{clip_id}/creator-gaming-layout  GET (server/api.py:1953)  PUT (server/api.py:1967)
+    /clips/{clip_id}/export  POST (server/api.py:2262)
     /clips/{clip_id}/frame  GET (server/youtube_api.py:538)
-    /clips/{clip_id}/glossary  GET (server/api.py:2185)  POST (server/api.py:2209)
-    /clips/{clip_id}/panels  GET (server/api.py:1924)
-    /clips/{clip_id}/people  GET (server/api.py:1929)
-    /clips/{clip_id}/preview  POST (server/api.py:1705)
+    /clips/{clip_id}/glossary  GET (server/api.py:2204)  POST (server/api.py:2228)
+    /clips/{clip_id}/panels  GET (server/api.py:1943)
+    /clips/{clip_id}/people  GET (server/api.py:1948)
+    /clips/{clip_id}/preview  POST (server/api.py:1724)
     /clips/{clip_id}/publish  GET (server/youtube_api.py:383)  POST (server/youtube_api.py:397)
-    /clips/{clip_id}/render  POST (server/api.py:1679)
-    /clips/{clip_id}/snap  GET (server/api.py:1919)
-    /clips/{clip_id}/source-frame  GET (server/api.py:1911)
+    /clips/{clip_id}/render  POST (server/api.py:1698)
+    /clips/{clip_id}/snap  GET (server/api.py:1938)
+    /clips/{clip_id}/source-frame  GET (server/api.py:1930)
     /clips/{clip_id}/thumbnail  POST (server/youtube_api.py:723)
     /clips/{clip_id}/thumbnail/generate  POST (server/youtube_api.py:682)
     /clips/{clip_id}/thumbnail/generated/{index}  GET (server/youtube_api.py:715)
-    /clips/{clip_id}/tighten  POST (server/api.py:1577)
-    /clips/{clip_id}/translations  GET (server/api.py:2128)
-    /clips/{clip_id}/translations/{language}  PUT (server/api.py:2153)  DELETE (server/api.py:2232)
-    /clips/{clip_id}/words  GET (server/api.py:1981)
-    /creators  GET (server/api.py:2363)
-    /creators/merge  POST (server/api.py:2488)
-    /creators/split/{account_id}  POST (server/api.py:2502)
-    /creators/{creator_id}  GET (server/api.py:2409)  DELETE (server/api.py:2574)
-    /creators/{creator_id}/accounts  POST (server/api.py:2473)
-    /creators/{creator_id}/branding  POST (server/api.py:2608)
-    /creators/{creator_id}/knowledge  DELETE (server/api.py:2530)
-    /creators/{creator_id}/knowledge/{knowledge_id}  DELETE (server/api.py:2516)
-    /creators/{creator_id}/learning  POST (server/api.py:2594)
-    /creators/{creator_id}/memory  DELETE (server/api.py:2558)
-    /export/batch  POST (server/api.py:2247)
+    /clips/{clip_id}/tighten  POST (server/api.py:1596)
+    /clips/{clip_id}/translations  GET (server/api.py:2147)
+    /clips/{clip_id}/translations/{language}  PUT (server/api.py:2172)  DELETE (server/api.py:2251)
+    /clips/{clip_id}/words  GET (server/api.py:2000)
+    /creators  GET (server/api.py:2382)
+    /creators/merge  POST (server/api.py:2507)
+    /creators/split/{account_id}  POST (server/api.py:2521)
+    /creators/{creator_id}  GET (server/api.py:2428)  DELETE (server/api.py:2593)
+    /creators/{creator_id}/accounts  POST (server/api.py:2492)
+    /creators/{creator_id}/branding  POST (server/api.py:2627)
+    /creators/{creator_id}/knowledge  DELETE (server/api.py:2549)
+    /creators/{creator_id}/knowledge/{knowledge_id}  DELETE (server/api.py:2535)
+    /creators/{creator_id}/learning  POST (server/api.py:2613)
+    /creators/{creator_id}/memory  DELETE (server/api.py:2577)
+    /export/batch  POST (server/api.py:2266)
     /feedback/diagnostics  GET (server/api.py:748)
     /feedback/submit  POST (server/api.py:758)
     /health  GET (server/api.py:711)
@@ -189,26 +189,26 @@ Full path list (path, then METHOD (module:line) for each method), from `probe/ro
     /integrations/streams  POST (server/integrations.py:234)
     /integrations/streams/{session_id}  GET (server/integrations.py:263)  DELETE (server/integrations.py:283)
     /integrations/streams/{session_id}/link  POST (server/integrations.py:271)
-    /jobs  POST (server/api.py:803)  GET (server/api.py:977)
-    /jobs/batch  POST (server/api.py:1118)
-    /jobs/{job_id}  GET (server/api.py:985)  PATCH (server/api.py:1066)  DELETE (server/api.py:1087)
-    /jobs/{job_id}/log  GET (server/api.py:1181)
-    /jobs/{job_id}/move  POST (server/api.py:1030)
-    /jobs/{job_id}/retry  POST (server/api.py:1051)
-    /languages  GET (server/api.py:2017)
-    /media/preview/{clip_id}  GET (server/api.py:1974)
-    /media/{clip_id}  GET (server/api.py:2001)
-    /models  GET (server/api.py:2811)
-    /models/activate  POST (server/api.py:2844)
-    /models/pull  POST (server/api.py:2858)
-    /models/{tag:path}  DELETE (server/api.py:2920)
+    /jobs  POST (server/api.py:822)  GET (server/api.py:996)
+    /jobs/batch  POST (server/api.py:1137)
+    /jobs/{job_id}  GET (server/api.py:1004)  PATCH (server/api.py:1085)  DELETE (server/api.py:1106)
+    /jobs/{job_id}/log  GET (server/api.py:1200)
+    /jobs/{job_id}/move  POST (server/api.py:1049)
+    /jobs/{job_id}/retry  POST (server/api.py:1070)
+    /languages  GET (server/api.py:2036)
+    /media/preview/{clip_id}  GET (server/api.py:1993)
+    /media/{clip_id}  GET (server/api.py:2020)
+    /models  GET (server/api.py:2830)
+    /models/activate  POST (server/api.py:2863)
+    /models/pull  POST (server/api.py:2877)
+    /models/{tag:path}  DELETE (server/api.py:2939)
     /publish/plan  POST (server/youtube_api.py:560)
     /publish/plan/execute  POST (server/youtube_api.py:629)
     /publish/{job_id}/cancel  POST (server/youtube_api.py:494)
-    /queue  GET (server/api.py:1001)
-    /queue/clear  POST (server/api.py:1105)
-    /queue/pause  POST (server/api.py:1009)
-    /queue/resume  POST (server/api.py:1019)
+    /queue  GET (server/api.py:1020)
+    /queue/clear  POST (server/api.py:1124)
+    /queue/pause  POST (server/api.py:1028)
+    /queue/resume  POST (server/api.py:1038)
     /remote-render  GET (remote_render/service.py:174)  PUT (remote_render/service.py:178)
     /remote-render/jobs/{job_id}/retry  POST (remote_render/service.py:247)
     /remote-render/pairing-code  POST (remote_render/service.py:195)
@@ -217,49 +217,49 @@ Full path list (path, then METHOD (module:line) for each method), from `probe/ro
     /remote-render/videos/{video_id}/render-locally  POST (remote_render/service.py:243)
     /remote-render/workers/{worker_id}  DELETE (remote_render/service.py:205)
     /remote-render/workers/{worker_id}/hold  POST (remote_render/service.py:214)
-    /settings  GET (server/api.py:2939)  PATCH (server/api.py:2954)
-    /sources/frame  GET (server/api.py:1807)
-    /sources/people  GET (server/api.py:1816)
-    /sources/snap  GET (server/api.py:1873)
-    /sources/suggest  GET (server/api.py:1830)
-    /sports  GET (server/api.py:2929)
-    /storage  GET (server/api.py:1242)
-    /storage/cleanup  POST (server/api.py:1324)
-    /storage/videos  GET (server/api.py:1255)
+    /settings  GET (server/api.py:2958)  PATCH (server/api.py:2973)
+    /sources/frame  GET (server/api.py:1826)
+    /sources/people  GET (server/api.py:1835)
+    /sources/snap  GET (server/api.py:1892)
+    /sources/suggest  GET (server/api.py:1849)
+    /sports  GET (server/api.py:2948)
+    /storage  GET (server/api.py:1261)
+    /storage/cleanup  POST (server/api.py:1343)
+    /storage/videos  GET (server/api.py:1274)
     /system/stats  GET (server/api.py:731)
-    /translate  POST (server/api.py:2091)
-    /uploadpost/batch  POST (server/uploadpost_api.py:327)
-    /uploadpost/capabilities  GET (server/uploadpost_api.py:513)
-    /uploadpost/clips/{clip_id}  GET (server/uploadpost_api.py:581)
-    /uploadpost/clips/{clip_id}/publish  POST (server/uploadpost_api.py:226)
-    /uploadpost/connect  POST (server/uploadpost_api.py:187)
-    /uploadpost/connections  GET (server/uploadpost_api.py:167)
-    /uploadpost/key  PUT (server/uploadpost_api.py:115)  DELETE (server/uploadpost_api.py:144)
-    /uploadpost/profiles  GET (server/uploadpost_api.py:155)
-    /uploadpost/refresh/{request_id}  POST (server/uploadpost_api.py:443)
-    /uploadpost/retry/{request_id}  POST (server/uploadpost_api.py:470)
-    /uploadpost/settings  PATCH (server/uploadpost_api.py:103)
-    /uploadpost/status  GET (server/uploadpost_api.py:95)
-    /videos  GET (server/api.py:1443)
-    /videos/local  POST (server/api.py:867)
-    /videos/local/shape  GET (server/api.py:854)
-    /videos/{video_id}  DELETE (server/api.py:1340)
-    /videos/{video_id}/clips  GET (server/api.py:1470)
-    /voices  GET (server/api.py:2043)
-    /voices/preview  GET (server/api.py:2057)
-    /woopsocial/batch  POST (server/woopsocial_api.py:338)
-    /woopsocial/batch/plan  POST (server/woopsocial_api.py:257)
-    /woopsocial/clips/{clip_id}/publish  POST (server/woopsocial_api.py:204)
-    /woopsocial/connect  POST (server/woopsocial_api.py:177)
-    /woopsocial/connections  GET (server/woopsocial_api.py:164)
-    /woopsocial/in-flight  GET (server/woopsocial_api.py:408)
-    /woopsocial/key  PUT (server/woopsocial_api.py:131)  DELETE (server/woopsocial_api.py:153)
-    /woopsocial/refresh  POST (server/woopsocial_api.py:380)
-    /woopsocial/refresh/{post_id}  POST (server/woopsocial_api.py:417)
-    /woopsocial/schedule  GET (server/woopsocial_api.py:398)
-    /woopsocial/settings  PATCH (server/woopsocial_api.py:118)
-    /woopsocial/status  GET (server/woopsocial_api.py:110)
-    /ws  WEBSOCKET (server/api.py:1428)
+    /translate  POST (server/api.py:2110)
+    /uploadpost/batch  POST (server/uploadpost_api.py:338)
+    /uploadpost/capabilities  GET (server/uploadpost_api.py:528)
+    /uploadpost/clips/{clip_id}  GET (server/uploadpost_api.py:577)
+    /uploadpost/clips/{clip_id}/publish  POST (server/uploadpost_api.py:227)
+    /uploadpost/connect  POST (server/uploadpost_api.py:188)
+    /uploadpost/connections  GET (server/uploadpost_api.py:168)
+    /uploadpost/key  PUT (server/uploadpost_api.py:116)  DELETE (server/uploadpost_api.py:145)
+    /uploadpost/profiles  GET (server/uploadpost_api.py:156)
+    /uploadpost/refresh/{request_id}  POST (server/uploadpost_api.py:464)
+    /uploadpost/retry/{request_id}  POST (server/uploadpost_api.py:492)
+    /uploadpost/settings  PATCH (server/uploadpost_api.py:104)
+    /uploadpost/status  GET (server/uploadpost_api.py:96)
+    /videos  GET (server/api.py:1462)
+    /videos/local  POST (server/api.py:886)
+    /videos/local/shape  GET (server/api.py:873)
+    /videos/{video_id}  DELETE (server/api.py:1359)
+    /videos/{video_id}/clips  GET (server/api.py:1489)
+    /voices  GET (server/api.py:2062)
+    /voices/preview  GET (server/api.py:2076)
+    /woopsocial/batch  POST (server/woopsocial_api.py:344)
+    /woopsocial/batch/plan  POST (server/woopsocial_api.py:263)
+    /woopsocial/clips/{clip_id}/publish  POST (server/woopsocial_api.py:205)
+    /woopsocial/connect  POST (server/woopsocial_api.py:178)
+    /woopsocial/connections  GET (server/woopsocial_api.py:165)
+    /woopsocial/in-flight  GET (server/woopsocial_api.py:416)
+    /woopsocial/key  PUT (server/woopsocial_api.py:132)  DELETE (server/woopsocial_api.py:154)
+    /woopsocial/refresh  POST (server/woopsocial_api.py:386)
+    /woopsocial/refresh/{post_id}  POST (server/woopsocial_api.py:425)
+    /woopsocial/schedule  GET (server/woopsocial_api.py:406)
+    /woopsocial/settings  PATCH (server/woopsocial_api.py:119)
+    /woopsocial/status  GET (server/woopsocial_api.py:111)
+    /ws  WEBSOCKET (server/api.py:1447)
     /youtube/categories  GET (server/youtube_api.py:355)
     /youtube/connect  POST (server/youtube_api.py:238)  GET (server/youtube_api.py:265)
     /youtube/credentials  PUT (server/youtube_api.py:198)  DELETE (server/youtube_api.py:217)
@@ -280,12 +280,12 @@ Note: the 400 body is plain text, not the `{"detail": ...}` JSON convention of `
 
 (b) `POST /jobs {"url": "not a link"}` → **accepted, not rejected**: expected `200 {"job_id": <n>}` and a job that
 fails later in the worker. `JobIn.url` is a bare `str` (`server/api.py:40`), nothing validates it as a URL.
-`create_job` (`server/api.py:803-851`) calls `identify(body.url)`; run offline:
+`create_job` (`server/api.py:822-870`) calls `identify(body.url)`; run offline:
 `python3 -c "from sources.dispatch import identify; print(identify('not a link'))"` → `('youtube', None)`
 (`sources/dispatch.py:14-25`; `sources/youtube.py:34-38` regex finds no 11-char id). With `vid` None the handler
-reaches `d.add_job("process", json.dumps(payload), video_id=vid or "")` (`server/api.py:845`); the comment at
-`server/api.py:840-844` says "the pipeline is what should report a bad URL". Only 409 (queue full,
-`server/api.py:834-838`) and 422 (no `url`) reject at submit (`docs/API.md:260-262`); a non-http `webhook_url`
+reaches `d.add_job("process", json.dumps(payload), video_id=vid or "")` (`server/api.py:864`); the comment at
+`server/api.py:859-863` says "the pipeline is what should report a bad URL". Only 409 (queue full,
+`server/api.py:853-857`) and 422 (no `url`) reject at submit (`docs/API.md:260-262`); a non-http `webhook_url`
 is the other 400 (`docs/API.md:304-305`). This is why the test was not run: it would have queued a real job
 whose worker calls yt-dlp.
 
@@ -294,7 +294,7 @@ whose worker calls yt-dlp.
 (`server/api.py:480-488`) does `sports.clean(body.sport)` and converts `ValueError` to `HTTPException(400,
 f"sport: {e}")`. Run offline: `python3 -c "import sports; sports.clean({'name':'fakeball','highlights':'goals',
 'period':'full'})"` → `ValueError -> unknown sport 'fakeball'; available: soccer, basketball`
-(`sports/__init__.py:72` `clean()`). `GET /sports` (`server/api.py:2929-2937`) returns `sports.available()`;
+(`sports/__init__.py:72` `clean()`). `GET /sports` (`server/api.py:2948-2956`) returns `sports.available()`;
 offline `[s['id'] for s in sports.available()]` → `['soccer', 'basketball']`. Note `sport` also accepts a bare
 string (`sport: dict | str | None`, `server/api.py:49`); `sports.clean('fakeball')` gives the same error.
 
@@ -325,18 +325,18 @@ string (`sport: dict | str | None`, `server/api.py:49`); `sports.clean('fakeball
 **What works today (once `fastapi` is installed so the server starts).** An outside process is a plain HTTP
 client on loopback: (1) `GET /health` (`server/api.py:711`) then `GET /health/preflight` (`server/api.py:718`,
 `docs/API.md:178`) and refuse to continue on any `blocking && !ok` check; (2) `POST /jobs {"url": ...}`
-(`server/api.py:803`, `docs/API.md:218`) for a YouTube/Twitch/Kick link, or `POST /videos/local {"path": ...}`
-(`server/api.py:867`, `docs/API.md:329`) for a file already on this machine, optionally with `webhook_url` /
+(`server/api.py:822`, `docs/API.md:218`) for a YouTube/Twitch/Kick link, or `POST /videos/local {"path": ...}`
+(`server/api.py:886`, `docs/API.md:329`) for a file already on this machine, optionally with `webhook_url` /
 `webhook_secret` (`docs/API.md:272-306`) or a `then` action (`JobIn.then`, `server/api.py:39-64`); treat
 `{"job_id": null, "already_processed"|"already_queued"}` as an answer (`docs/API.md:254-262`); (3) wait by
-polling `GET /jobs/{id}` (`server/api.py:985`) or `GET /queue` (`server/api.py:1001`), or by listening on
-`ws://127.0.0.1:<port>/ws` for `job` / `progress` / `queue` events (`server/api.py:1428`, `docs/API.md:1230-1271`),
+polling `GET /jobs/{id}` (`server/api.py:1004`) or `GET /queue` (`server/api.py:1020`), or by listening on
+`ws://127.0.0.1:<port>/ws` for `job` / `progress` / `queue` events (`server/api.py:1447`, `docs/API.md:1230-1271`),
 or by receiving the one-shot webhook (`server/webhooks.py:8-11`); on failure read `GET /jobs/{id}/log`
-(`server/api.py:1181`); (4) read results with `GET /videos` (`server/api.py:1443`) and
-`GET /videos/{video_id}/clips` (`server/api.py:1470`, `docs/API.md:490-526`), fetch pixels with
-`GET /media/{clip_id}` (`server/api.py:2001`, range requests, `docs/API.md:528-539`) and words with
-`GET /clips/{id}/captions` / `GET /clips/{id}/words` (`server/api.py:1545`, `:1981`), and copy files out with
-`POST /clips/{id}/export` or `POST /export/batch` (`server/api.py:2243`, `:2247`). `examples/drive_the_api.py:42-167`
+(`server/api.py:1200`); (4) read results with `GET /videos` (`server/api.py:1462`) and
+`GET /videos/{video_id}/clips` (`server/api.py:1489`, `docs/API.md:490-526`), fetch pixels with
+`GET /media/{clip_id}` (`server/api.py:2020`, range requests, `docs/API.md:528-539`) and words with
+`GET /clips/{id}/captions` / `GET /clips/{id}/words` (`server/api.py:1564`, `:2000`), and copy files out with
+`POST /clips/{id}/export` or `POST /export/batch` (`server/api.py:2262`, `:2266`). `examples/drive_the_api.py:42-167`
 is exactly this sequence, and `main.py mcp` wraps the same calls as 13 MCP tools (`docs/API.md:1192-1228`).
 The caller chooses the engine's options (`sport`, `focus`, `longform`, `caption_style`, ... `server/api.py:39-64`)
 but the engine owns every stage.
@@ -350,28 +350,28 @@ but the engine owns every stage.
   out-of-process compute hook is remote rendering (`remote_render/service.py:174-247`, `remote_render/gateway.py`),
   which farms out rendering of already-chosen clips to a paired worker, not analysis or selection.
 - *Read the transcript:* no route. The transcript is `<data_dir>/transcripts/<video_id>.json`
-  (`server/api.py:1290-1291`, `:1523-1527`) and is read only server-side (captions, tighten); `grep -i transcript
+  (`server/api.py:1309-1310`, `:1542-1546`) and is read only server-side (captions, tighten); `grep -i transcript
   docs/API.md` lists no transcript endpoint; the nearest are the clip-relative `/clips/{id}/captions` and
   `/clips/{id}/words` (`docs/API.md:541-549`), which exist only after the engine has chosen and rendered a clip.
 - *Get the downloaded source file (or its path):* no route. `GET /videos` rows carry no path
-  (`docs/API.md:477-488`); the download sits at `<data_dir>/downloads/<video_id>.<ext>` (`server/api.py:923`,
+  (`docs/API.md:477-488`); the download sits at `<data_dir>/downloads/<video_id>.<ext>` (`server/api.py:942`,
   `:1719`, `core/paths.py cached_source()`) and the only pixel routes are per-clip `/media/{clip_id}`,
-  `/media/preview/{clip_id}` (`server/api.py:1974`) and single frames `/sources/frame`, `/sources/snap`
-  (`server/api.py:1807`, `:1873`, internal). A clip row does expose an absolute local `path` of the rendered clip
+  `/media/preview/{clip_id}` (`server/api.py:1993`) and single frames `/sources/frame`, `/sources/snap`
+  (`server/api.py:1826`, `:1892`, internal). A clip row does expose an absolute local `path` of the rendered clip
   (`docs/API.md:501`), which is a filesystem hint, not a stream.
 - *Return its own clips / candidates / scores:* no route creates a clip row. `POST /videos/local` only feeds a file
-  into the built-in pipeline (`server/api.py:867-976`); `PATCH /clips/{id}` edits an existing clip
-  (`server/api.py:1478`); `POST /clips/{id}/render`, `/preview`, `/tighten`, `/ai-edit` all re-run the engine's own
-  cutter on an existing clip (`server/api.py:1577-1705`). `scores` in the clip JSON is read-only output
+  into the built-in pipeline (`server/api.py:886-995`); `PATCH /clips/{id}` edits an existing clip
+  (`server/api.py:1497`); `POST /clips/{id}/render`, `/preview`, `/tighten`, `/ai-edit` all re-run the engine's own
+  cutter on an existing clip (`server/api.py:1596-1724`). `scores` in the clip JSON is read-only output
   (`docs/API.md:513-516`).
 - *Report progress into the engine:* no inbound route. Progress is emitted in-process by `core.progress.emit`
   (`core/progress.py:30`) → `broadcaster.publish({"type": "progress", ...})` (`server/jobs.py:121`) → WebSocket;
   the only `POST .../progress` is the render-worker gateway `POST /v1/jobs/{job_id}/progress`
   (`remote_render/gateway.py:122`), on a separate authenticated app for paired render workers.
-- *Live progress of a running job over plain HTTP:* `GET /jobs/{id}` returns the DB row only (`server/api.py:985-994`;
+- *Live progress of a running job over plain HTTP:* `GET /jobs/{id}` returns the DB row only (`server/api.py:1004-1013`;
   fields at `docs/API.md:370-381`, no stage/percent). The worker's `progress_snapshot()` (`server/jobs.py:333-352`:
   stage, label, percent, eta_seconds) is surfaced only via `/integrations/streams/{session_id}`
-  (`server/integrations.py:122`) and `/automation/items` (`server/automation.py:254`, `:1057`); otherwise only WS
+  (`server/integrations.py:122`) and `/automation/items` (`server/automation.py:254`, `:1067`); otherwise only WS
   `progress` events (`docs/API.md:1241`, `:1252-1256`), which are dropped for slow clients (`docs/API.md:1268-1271`).
 - *Operational limits an outside process inherits:* no authentication at all (`docs/API.md:77-83`); loopback only
   with a strict `Host` allowlist (`server/api.py:589`); one worker, one video at a time (`docs/API.md:1356-1358`);

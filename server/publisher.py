@@ -19,6 +19,7 @@ there, and the user is told to check their channel rather than have the app
 guess.
 """
 
+import importlib
 import json
 import threading
 import time
@@ -26,6 +27,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from core.state import StateDB
+from server import posts
 from server import youtube_service as service
 from server.events import broadcaster
 
@@ -46,10 +48,34 @@ class PublishWorker(threading.Thread):
         self._verify: list[tuple[float, int, str]] = []  # (due_at, clip_id, video_id)
         # When to next ask a provider what became of the posts it accepted.
         self._next_provider_check = 0.0
+        # When to next ask about posts published without a link.
+        self._next_url_check = 0.0
+        # Upload-Post request id -> unix time it was last asked about. In
+        # memory only: after a restart each due request is asked once and its
+        # cadence carries on (uploadpost_service.due_requests).
+        self._uploadpost_checked: dict[str, float] = {}
+        # When to next look for scheduled YouTube uploads whose time came, and
+        # clip id -> unix time each was last tried (youtube_service.due_live_checks).
+        self._next_youtube_check = 0.0
+        self._youtube_tried: dict[int, float] = {}
+        # Campaign submissions (campaigns/queue.py advance): when to next run
+        # a pass, whether one was asked for now, and until when Discord's
+        # global rate limit holds every webhook send. In memory only: every
+        # other piece of their state is in campaign_submissions.
+        self._next_campaign_check = 0.0
+        self._campaigns_now = False
+        self._campaign_pause = 0.0
 
     # ---- lifecycle -------------------------------------------------------
 
     def notify(self) -> None:
+        self._wake.set()
+
+    def notify_campaigns(self) -> None:
+        """Run the campaign step on the next turn of the loop instead of at
+        its 30-second tick: an attach, a typed link or an approval is then
+        looked at (and a webhook row sent) at once."""
+        self._campaigns_now = True
         self._wake.set()
 
     def stop(self) -> None:
@@ -65,10 +91,14 @@ class PublishWorker(threading.Thread):
             recovered = db.recover_running_publish_jobs()
             if recovered:
                 print(f"{recovered} upload(s) were interrupted by a restart and will not retry.")
+            self._recover_campaign_sends(db)
 
             while not self._stop.is_set():
                 self._run_due_verifications(db)
                 self._refresh_provider_posts(db)
+                self._refresh_missing_urls(db)
+                self._check_scheduled_youtube(db)
+                self._advance_campaigns(db)
                 job = db.claim_next_publish_job()
                 if job is None:
                     self._wake.wait(timeout=2.0)
@@ -97,11 +127,17 @@ class PublishWorker(threading.Thread):
 
         Contained and quiet: this is a read, and a provider being unreachable
         must never disturb the uploads this worker is actually here to run.
+        Each provider is contained on its own, so one failing, or having
+        nothing to ask about, never stops the other being asked.
         """
         now = time.monotonic()
         if now < self._next_provider_check:
             return
         self._next_provider_check = now + self.PROVIDER_CHECK_SECONDS
+        self._refresh_woopsocial(db)
+        self._refresh_uploadpost(db)
+
+    def _refresh_woopsocial(self, db: StateDB) -> None:
         try:
             from server import woopsocial_service as woop
 
@@ -129,6 +165,160 @@ class PublishWorker(threading.Thread):
                 )
         except Exception as e:
             print(f"  Could not check publish status: {e}")
+
+    def _refresh_uploadpost(self, db: StateDB) -> None:
+        """Follow Upload-Post publishes in the background, as the open panel
+        does in the foreground: only requests that are due, on a cadence that
+        slows as they age (uploadpost_service.due_requests)."""
+        try:
+            from server import uploadpost_service as up
+
+            if not up.is_enabled(db) or not up.has_key(self.data_dir):
+                return
+            checked = getattr(self, "_uploadpost_checked", None)
+            if checked is None:
+                checked = self._uploadpost_checked = {}
+            now = datetime.now(timezone.utc)
+            ids = up.due_requests(db, now=now, last_checked=checked)
+            if not ids:
+                return
+            out = up.refresh_in_flight(db, self.data_dir, ids=ids, now=now, last_checked=checked)
+            if out.get("updated"):
+                print(
+                    f"  Upload-Post status: {out['updated']} updated, "
+                    f"{out['still_waiting']} still waiting."
+                )
+        except Exception as e:
+            print(f"  Could not check Upload-Post status: {e}")
+
+    #: How often to ask again about posts published without a link. Slower
+    #: than the status check: these are live already, only the link is late.
+    URL_CHECK_SECONDS = 15 * 60
+
+    def _refresh_missing_urls(self, db: StateDB) -> None:
+        """Ask again about posts a provider called published without a link.
+
+        The status check above follows only posts still on their way, so a
+        link that came after the post went live was never fetched. Each one is
+        asked about for a day after it was due. Its own timer, and each
+        provider contained on its own.
+        """
+        mono = time.monotonic()
+        if mono < getattr(self, "_next_url_check", 0.0):
+            return
+        self._next_url_check = mono + self.URL_CHECK_SECONDS
+        now = datetime.now(timezone.utc)
+        for name, module in (("WoopSocial", "woopsocial_service"),
+                             ("Upload-Post", "uploadpost_service")):
+            try:
+                provider = importlib.import_module(f"server.{module}")
+                if not provider.is_enabled(db) or not provider.has_key(self.data_dir):
+                    continue
+                out = provider.refresh_missing_urls(db, self.data_dir, now=now)
+                if out.get("updated"):
+                    print(f"  {name} links: {out['updated']} post(s) updated.")
+            except Exception as e:
+                print(f"  Could not check {name} links: {e}")
+
+    #: How often to look for scheduled YouTube uploads whose time has come.
+    YOUTUBE_LIVE_CHECK_SECONDS = 10 * 60
+
+    def _check_scheduled_youtube(self, db: StateDB, *, now=None) -> None:
+        """Ask YouTube whether scheduled uploads went live once their time came.
+
+        A scheduled upload goes up private, and the only read-back was the one
+        a minute after the upload, in memory, so here it stayed private for
+        good. Each one is asked a few times after its time, one quota unit
+        each (youtube_service.due_live_checks), through the channel it went up
+        on. Contained and quiet like the provider checks: a read must never
+        disturb the uploads this worker is here to run.
+        """
+        mono = time.monotonic()
+        if mono < getattr(self, "_next_youtube_check", 0.0):
+            return
+        self._next_youtube_check = mono + self.YOUTUBE_LIVE_CHECK_SECONDS
+        try:
+            if not service.is_enabled(db):
+                return
+            tried = getattr(self, "_youtube_tried", None)
+            if tried is None:
+                tried = self._youtube_tried = {}
+            current = posts.as_utc(now)
+            stamp = current.isoformat().replace("+00:00", "Z")
+            unreachable = 0
+            for row in service.due_live_checks(db, current, last_tried=tried):
+                clip_id, video_id = row["clip_id"], row["youtube_id"]
+                tried[clip_id] = current.timestamp()
+                try:
+                    publisher = service.make_publisher(
+                        self.config, self.data_dir, channel_id=row["channel_id"] or None
+                    )
+                    status = publisher.video_status(video_id)
+                except Exception:
+                    # Not counted as a check: the next pass tries it again.
+                    unreachable += 1
+                    continue
+                fields = service.live_check_fields(status, checked_at=stamp)
+                db.set_upload_check(clip_id, **fields)
+                if fields.get("state") in ("rejected", "failed"):
+                    self._emit(0, clip_id, phase="checked", fraction=1.0, message=fields["error"],
+                               terminal="checked", state=fields["state"], youtube_id=video_id)
+            if unreachable:
+                print(f"  Could not check {unreachable} scheduled YouTube upload(s).")
+        except Exception as e:
+            print(f"  Could not check scheduled YouTube uploads: {e}")
+
+    # ---- campaign submissions --------------------------------------------
+
+    #: How often the campaign step runs when nothing asks for it sooner.
+    CAMPAIGN_CHECK_SECONDS = 30
+    # Caught Discord errors may carry webhook credentials: these steps log
+    # only which operation failed, never the exception's text.
+
+    def _recover_campaign_sends(self, db: StateDB) -> None:
+        """At startup, every webhook send a restart cut off becomes
+        awaiting confirmation ("check the channel"), and is never sent again
+        by itself: it may have reached Discord. Contained: an error here
+        (sqlite's "database is locked" while other threads run their own
+        recovery) must not end this thread and every upload with it."""
+        try:
+            from campaigns.statemachine import REASONS
+
+            settled = db.recover_sending_submissions(REASONS["restart"])
+            if settled:
+                print(f"{settled} campaign send(s) were cut off by a restart: check Discord.")
+        except Exception:
+            print("Could not settle campaign sends cut off by a restart.")
+
+    def _advance_campaigns(self, db: StateDB, *, now: float | None = None) -> None:
+        """Move campaign submissions on (campaigns/queue.py advance): follow
+        each post until it is live with a link, then send what a webhook may
+        send. Every CAMPAIGN_CHECK_SECONDS, at once after notify_campaigns(),
+        and again in a couple of seconds while sends are left over. Contained
+        like the provider checks: it never raises into the loop."""
+        mono = time.monotonic()
+        asked = getattr(self, "_campaigns_now", False)
+        if not asked and mono < getattr(self, "_next_campaign_check", 0.0):
+            return
+        self._campaigns_now = False
+        self._next_campaign_check = mono + self.CAMPAIGN_CHECK_SECONDS
+        try:
+            from campaigns import discord_http, post_links, queue
+            from campaigns.model import SEND_SPACING_SECONDS
+
+            http = getattr(self, "campaign_http", None) or discord_http.Http()
+            post_links.recover(db)
+            out = queue.advance(db, self.data_dir, now=time.time() if now is None else now, http=http,
+                                emit=self._emit_campaign, paused_until=getattr(self, "_campaign_pause", 0.0))
+            self._campaign_pause = out["paused_until"]
+            if out["more"]:
+                self._next_campaign_check = mono + SEND_SPACING_SECONDS
+        except Exception:
+            print("  Could not move campaign submissions on.")
+
+    def _emit_campaign(self, event: dict) -> None:
+        """A submission changed status: the `campaign` event on /ws."""
+        broadcaster.publish(event)
 
     # ---- one job ---------------------------------------------------------
 
@@ -167,6 +357,12 @@ class PublishWorker(threading.Thread):
         # channel_id selects which connected channel's token to publish with;
         # it is not part of the video's metadata, so it comes out here.
         channel_id = request_data.pop("channel_id", None)
+        destination_id = request_data.pop("discord_destination_id", None)
+        if destination_id is not None:
+            from campaigns import post_links
+
+            post_links.prepare(db, destination_id=destination_id, clip_id=clip_id, platforms=["youtube"],
+                               provider="youtube", publish_job_id=job_id, title=request_data.get("title", ""))
         publisher = service.make_publisher(
             self.config, self.data_dir, channel_id=channel_id
         )
@@ -219,6 +415,8 @@ class PublishWorker(threading.Thread):
             "start_s": clip["start_s"],
             "end_s": clip["end_s"],
             "title": request.title,
+            # As it went up, hashtags included (_describe above).
+            "description": request.description,
             "privacy": result.requested_privacy,
             "actual_privacy": result.actual_privacy,
             "publish_at": result.publish_at or "",

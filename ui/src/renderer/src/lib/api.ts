@@ -736,6 +736,7 @@ export const api = {
   uploadPostPublish: (
     clipId: number,
     body: {
+      discord_destination_id?: number | null
       platforms: string[]
       title: string
       description?: string
@@ -763,6 +764,7 @@ export const api = {
   /** Several clips, each uploaded once and fanned out. `every_hours` spaces
    *  them through Upload-Post's scheduler rather than firing a burst. */
   uploadPostBatch: (body: {
+    discord_destination_id?: number | null
     clip_ids: number[]
     platforms: string[]
     every_hours?: number
@@ -776,6 +778,10 @@ export const api = {
     }>('/uploadpost/batch', { method: 'POST', body: JSON.stringify(body) }),
   clipUploadPostRows: (clipId: number) =>
     request<{ platforms: PlatformRow[] }>(`/uploadpost/clips/${clipId}`),
+  /** Where a clip went, through any provider and the direct YouTube upload.
+   *  Answers whichever providers are switched on. */
+  clipPosts: (clipId: number) =>
+    request<{ clip_id: number; posts: PlatformRow[] }>(`/clips/${clipId}/posts`),
 
   // ---- WoopSocial: the second provider ----
   // Same job as Upload-Post, different account. Routes mirror each other so
@@ -804,6 +810,7 @@ export const api = {
   woopSocialPublish: (
     clipId: number,
     body: {
+      discord_destination_id?: number | null
       platforms: string[]
       title: string
       description?: string
@@ -821,6 +828,7 @@ export const api = {
   /** Several clips through WoopSocial, spaced by their own scheduler so a
    *  run lasting days survives the app being closed. */
   woopSocialBatch: (body: {
+    discord_destination_id?: number | null
     clip_ids: number[]
     platforms: string[]
     every_hours?: number

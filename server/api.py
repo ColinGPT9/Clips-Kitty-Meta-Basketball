@@ -767,6 +767,12 @@ def create_app(config: dict, settings_path: Path) -> FastAPI:
         publish_worker=publish_worker,
     )
 
+    # Where a clip went, across every provider and the direct YouTube upload,
+    # behind no provider's switch.
+    from server import posts_api
+
+    posts_api.install(app, db=db)
+
     # Settings → AI: local Ollama (the default) or a cloud model on the
     # user's own key. Its own module, the same way the publishers are.
     from server import ai_api
@@ -787,6 +793,20 @@ def create_app(config: dict, settings_path: Path) -> FastAPI:
 
     account_service = connected_accounts_api.make_service(data_dir)
     connected_feed = ConnectedFeed(account_service)
+
+    # Settings → Discord (campaigns/): sign-in and webhook destinations for
+    # clipping campaigns. Its changing routes take the same session secret.
+    from server import discord_api
+
+    discord_api.install(app, db=db, data_dir=data_dir, session_secret=desktop_session,
+                        publish_worker=publish_worker)
+
+    # Clipping campaigns and their submissions (campaigns/): the publish
+    # worker follows each post and sends what a webhook may send.
+    from server import campaigns_api
+
+    campaigns_api.install(app, db=db, data_dir=data_dir, publish_worker=publish_worker,
+                          session_secret=desktop_session)
 
     # Streamer integrations such as the OBS plugin: hand over a finished stream,
     # find its VOD, report progress. Its own module for the same reason.

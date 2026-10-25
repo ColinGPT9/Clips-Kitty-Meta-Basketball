@@ -16,9 +16,11 @@ call from create_app(). The same two rules hold:
 from pathlib import Path
 
 from fastapi import HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from campaigns import post_links
 from publish.errors import PublishError
+from server import posts
 from server import uploadpost_service as service
 from server.feedback import redact
 
@@ -37,6 +39,7 @@ class SettingsIn(BaseModel):
 
 
 class PublishIn(BaseModel):
+    discord_destination_id: int | None = Field(default=None, ge=1)
     platforms: list[str] = []
     title: str = ""
     description: str = ""
@@ -55,6 +58,7 @@ class PublishIn(BaseModel):
 
 
 class BatchIn(BaseModel):
+    discord_destination_id: int | None = Field(default=None, ge=1)
     clip_ids: list[int] = []
     platforms: list[str] = []
     overrides: dict[str, dict] = {}
@@ -306,6 +310,11 @@ def install(app, *, config, db, data_dir, publish_worker=None) -> None:
             )
 
             try:
+                post_links.prepare(d, destination_id=body.discord_destination_id, clip_id=clip_id,
+                                   platforms=body.platforms, provider="upload_post", title=body.title.strip())
+            except ValueError as e:
+                raise HTTPException(400, str(e)) from e
+            try:
                 result = publisher.start(
                     Path(clip["path"]),
                     platforms=body.platforms,
@@ -318,7 +327,19 @@ def install(app, *, config, db, data_dir, publish_worker=None) -> None:
             except PublishError as e:
                 raise _fail(e) from e
 
-            _record(d, clip_id, clip, result)
+            # Publish time: identity, when it is due ('' when it goes now or
+            # Upload-Post picks the time from its queue), the text each
+            # platform was sent and the visibility asked for.
+            service.record_outcomes(
+                d, clip_id, clip, result, scheduled_for=when,
+                caption=service.captions(
+                    body.platforms, title=body.title, description=description,
+                    tags=body.tags, overrides=body.overrides,
+                ),
+                visibility=posts.visibilities("upload_post", body.platforms, body.overrides),
+            )
+            if body.discord_destination_id is not None:
+                post_links.recover(d, completed_clip=clip_id, provider="upload_post")
             service.save_settings(d, {"platforms": body.platforms})
             return _publish_payload(d, clip_id, result.request_id)
         finally:
@@ -359,6 +380,10 @@ def install(app, *, config, db, data_dir, publish_worker=None) -> None:
         try:
             _guard(d)
             overrides = platform_overrides(body.overrides)
+            try:
+                post_links.validate_destination(d, body.discord_destination_id)
+            except ValueError as e:
+                raise HTTPException(400, str(e)) from e
             lacking = missing_required(body.platforms, dict(overrides))
             if lacking:
                 raise HTTPException(
@@ -399,26 +424,34 @@ def install(app, *, config, db, data_dir, publish_worker=None) -> None:
                     description = f"{description}\n\n{standing}".strip()
 
                 timing: list = []
+                when = ""
                 if body.add_to_queue:
                     timing = schedule_fields(add_to_queue=True)
                 elif body.every_hours or body.start_at:
                     at = start + timedelta(hours=body.every_hours * index)
+                    when = at.isoformat()
                     timing = schedule_fields(
-                        scheduled_date=at.isoformat(), timezone=body.timezone
+                        scheduled_date=when, timezone=body.timezone
                     )
+                tags = _tags_of(clip)
 
                 fields = (
                     build_fields(
                         title=title,
                         description=description,
                         # Stored as a JSON list, not a space-separated string.
-                        tags=_tags_of(clip),
+                        tags=tags,
                         first_comment=settings.get("first_comment") or "",
                     )
                     + overrides
                     + timing
                 )
 
+                try:
+                    post_links.prepare(d, destination_id=body.discord_destination_id, clip_id=clip_id,
+                                       platforms=body.platforms, provider="upload_post", title=title)
+                except ValueError as e:
+                    raise HTTPException(400, str(e)) from e
                 try:
                     result = publisher.start(
                         Path(clip["path"]),
@@ -432,7 +465,16 @@ def install(app, *, config, db, data_dir, publish_worker=None) -> None:
                     skipped.append({"clip_id": clip_id, "reason": e.message})
                     continue
 
-                _record(d, clip_id, clip, result)
+                service.record_outcomes(
+                    d, clip_id, clip, result, scheduled_for=when,
+                    caption=service.captions(
+                        body.platforms, title=title, description=description,
+                        tags=tags, overrides=body.overrides,
+                    ),
+                    visibility=posts.visibilities("upload_post", body.platforms, body.overrides),
+                )
+                if body.discord_destination_id is not None:
+                    post_links.recover(d, completed_clip=clip_id, provider="upload_post")
                 started.append({"clip_id": clip_id, "request_id": result.request_id})
 
             service.save_settings(d, {"platforms": body.platforms})
@@ -452,7 +494,6 @@ def install(app, *, config, db, data_dir, publish_worker=None) -> None:
             if not rows:
                 raise HTTPException(404, "no such publish")
             clip_id = int(rows[0]["clip_id"])
-            clip = d.get_clip(clip_id)
 
             settings = service.load_settings(d)
             publisher = UploadPostPublisher(_client(), settings.get("profile") or "")
@@ -462,7 +503,9 @@ def install(app, *, config, db, data_dir, publish_worker=None) -> None:
                 raise _fail(e) from e
 
             if result.outcomes:
-                _record(d, clip_id, clip, result)
+                # With the request's rows, so a platform sent again since
+                # under a newer request keeps that request's row.
+                service.record_refresh(d, clip_id, result, known=rows)
             return _publish_payload(d, clip_id, request_id)
         finally:
             d.close()
@@ -487,7 +530,6 @@ def install(app, *, config, db, data_dir, publish_worker=None) -> None:
                 raise HTTPException(400, "Nothing failed on that publish.")
 
             clip_id = int(rows[0]["clip_id"])
-            clip = d.get_clip(clip_id)
             settings = service.load_settings(d)
             publisher = UploadPostPublisher(_client(), settings.get("profile") or "")
             try:
@@ -495,17 +537,11 @@ def install(app, *, config, db, data_dir, publish_worker=None) -> None:
             except PublishError as e:
                 raise _fail(e) from e
 
-            if result.outcomes:
-                _record(d, clip_id, clip, result)
-            else:
-                # Their retry can answer with an acknowledgement rather than
-                # fresh per-platform detail. Put the failed rows back into
-                # flight so the poller picks the real states up.
-                for row in rows:
-                    if row["state"] == "failed":
-                        d.record_clip_publish(
-                            clip_id, row["platform"], {"state": "queued", "error": ""}
-                        )
+            # A re-send of the failed platforms: their clocks start again. Their
+            # retry can answer with an acknowledgement rather than fresh
+            # per-platform detail; then the failed rows go back into flight so
+            # the poller picks the real states up (uploadpost_service.record_retry).
+            service.record_retry(d, clip_id, result, rows)
             return _publish_payload(d, clip_id, request_id)
         finally:
             d.close()
@@ -545,25 +581,6 @@ def install(app, *, config, db, data_dir, publish_worker=None) -> None:
         except (TypeError, ValueError):
             return []
         return [str(t).lstrip("#") for t in parsed if str(t).strip()] if isinstance(parsed, list) else []
-
-    def _record(d, clip_id: int, clip, result) -> None:
-        """Write one row per destination, keeping each platform's own state."""
-        for outcome in result.outcomes:
-            d.record_clip_publish(
-                clip_id,
-                outcome.platform,
-                {
-                    "provider": "upload_post",
-                    "video_id": (clip["video_id"] if clip is not None else "") or "",
-                    "start_s": (clip["start_s"] if clip is not None else 0) or 0,
-                    "end_s": (clip["end_s"] if clip is not None else 0) or 0,
-                    "state": outcome.state,
-                    "post_id": outcome.post_id,
-                    "post_url": outcome.post_url,
-                    "error": outcome.error,
-                    "request_id": result.request_id,
-                },
-            )
 
     def _publish_payload(d, clip_id: int, request_id: str) -> dict:
         rows = [dict(r) for r in d.clip_publishes(clip_id)]

@@ -115,6 +115,7 @@ class PublishSettings(BaseModel):
     # isYourBrand / isBrandedContent, instagram|facebook.postType,
     # pinterest.pinterestBoardId.
     overrides: dict = {}
+    discord_destination_id: int | None = Field(default=None, ge=1)
 
 
 class AutomationPatch(BaseModel):
@@ -159,6 +160,15 @@ def publish_settings(watch) -> PublishSettings:
         return PublishSettings(**json.loads(watch["publish"] or "{}"))
     except Exception:
         return PublishSettings()
+
+
+def _validate_discord_destination(d: StateDB, settings: PublishSettings) -> None:
+    from campaigns import post_links
+
+    try:
+        post_links.validate_destination(d, settings.discord_destination_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
 
 
 def watch_options(watch) -> dict:
@@ -478,7 +488,7 @@ class ChannelWatcher(threading.Thread):
         self._activity: deque[dict] = deque(maxlen=ACTIVITY_KEEP)
         self._activity_lock = threading.Lock()
         self._doing = ""
-        self._published_seen: set[tuple[int, str]] | None = None
+        self._published_seen: set[tuple] | None = None
 
     @property
     def interval_seconds(self) -> float:
@@ -537,6 +547,7 @@ class ChannelWatcher(threading.Thread):
                 # Watching is off, but a publish someone asked for, or one a
                 # restart interrupted, still goes out.
                 self._decide_publishing(d, new=False)
+                self._attach_discord_links(d, now)
                 return
             for watch in d.watches_due(now):
                 self._poll(d, watch, now)
@@ -545,10 +556,35 @@ class ChannelWatcher(threading.Thread):
             self._retry_failed_runs(d, now)
             self._retry_rejected_posts(d, now)
             self._decide_publishing(d)
+            self._attach_discord_links(d, now)
             self._free_disk(d)
             self._notice_posts(d)
         finally:
             d.close()
+
+    def _attach_discord_links(self, d: StateDB, now: float) -> None:
+        """Recover attachments from saved posts, including interrupted publishes."""
+        from campaigns import post_links
+        from campaigns import queue as campaign_queue
+
+        for watch in d.list_watches():
+            destination_id = publish_settings(watch).discord_destination_id
+            if destination_id is None or d.get_destination(destination_id) is None:
+                continue
+            items = d.conn.execute(
+                "SELECT * FROM watch_items WHERE watch_id = ? AND state = 'queued' "
+                "AND (publish_state IN ('publishing', 'done') OR chosen_clips != '') "
+                "AND EXISTS (SELECT 1 FROM clip_publishes WHERE video_id = watch_items.video_id)",
+                (watch["id"],),
+            ).fetchall()
+            if not items:
+                continue
+            with d.transaction():
+                campaign_id = post_links.campaign_for_destination(d, destination_id)
+                for item in items:
+                    campaign_queue.attach_for_watch(
+                        d, watch=watch, item=item, campaign_ids=[campaign_id], now=now,
+                    )
 
     # -- 1. look at the channel -----------------------------------------------
 
@@ -961,16 +997,26 @@ class ChannelWatcher(threading.Thread):
 
         The publish worker is what learns it, from WoopSocial. This only
         compares what it saw last time, so the panel can show each post
-        landing. The first look just remembers what was already there."""
+        landing. The first look just remembers what was already there.
+
+        Keyed on the post's identity (video, window, platform), not the clip
+        id: a re-render moves the row to the clip's new id, and the post it
+        describes is the same one, so it is not announced again."""
         rows = d.conn.execute(
-            "SELECT p.clip_id, p.platform, p.post_url, c.title, c.hook FROM clip_publishes p "
+            "SELECT p.video_id, p.start_s, p.end_s, p.platform, p.post_url, c.title, c.hook "
+            "FROM clip_publishes p "
             "JOIN watch_items w ON w.video_id = p.video_id "
             "LEFT JOIN clips c ON c.id = p.clip_id WHERE p.state = 'published'"
         ).fetchall()
-        seen = {(int(r["clip_id"]), r["platform"]) for r in rows}
+
+        def key(r) -> tuple:
+            return (r["video_id"], round(float(r["start_s"] or 0), 2),
+                    round(float(r["end_s"] or 0), 2), r["platform"])
+
+        seen = {key(r) for r in rows}
         if self._published_seen is not None:
             for r in rows:
-                if (int(r["clip_id"]), r["platform"]) not in self._published_seen:
+                if key(r) not in self._published_seen:
                     self._say(f"Posted {_quoted(r['title'] or r['hook'] or '')} "
                               f"to {_label(r['platform'])}", "posted", r["post_url"] or "")
         self._published_seen = seen
@@ -1218,6 +1264,8 @@ def install(
             if preset not in PRESETS:
                 raise HTTPException(400, f"unknown preset '{preset}'")
             options["preset"] = preset
+            if body.publish is not None:
+                _validate_discord_destination(d, body.publish)
             watch_id = d.insert_watch(
                 channel.platform, channel.channel_key, name=channel.name,
                 publish=(body.publish or PublishSettings()).model_dump_json(),
@@ -1257,6 +1305,7 @@ def install(
                 options["preset"] = preset
                 fields["options"] = json.dumps(options)
             if body.publish is not None:
+                _validate_discord_destination(d, body.publish)
                 fields["publish"] = body.publish.model_dump_json()
             if body.backlog is not None:
                 fields["backlog"] = body.backlog
