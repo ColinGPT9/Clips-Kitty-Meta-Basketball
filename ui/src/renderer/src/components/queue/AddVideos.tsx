@@ -190,6 +190,7 @@ const PREF = {
   // Pipeline (a list of one) and Rate & understand's two steps (#138).
   edit: 'generate-edit',
   pipeline: 'generate-pipeline',
+  gaming_pipeline: 'generate-gaming-pipeline',
   rate: 'generate-rate',
   understand: 'generate-understand'
 } as const
@@ -236,7 +237,7 @@ function forgetGone(key: string, able: InstalledPlugin[]): void {
 /** Remember the plugins a row has now: its Pipeline and its Rate &
  *  understand steps, for the next video. */
 function rememberPlugins(o: JobOptions): void {
-  rememberChoices(PREF.pipeline, o.pipeline ? [o.pipeline] : null)
+  rememberChoices(o.gaming ? PREF.gaming_pipeline : PREF.pipeline, o.pipeline ? [o.pipeline] : null)
   for (const step of MOMENT_STEPS) rememberChoices(PREF[step], o[step])
 }
 
@@ -249,7 +250,9 @@ function startingOptions(): JobOptions {
   if (o.longform) return o
   const edit = rememberedChoices(PREF.edit)
   if (edit) o.edit = edit
-  const pipeline = rememberedChoices(PREF.pipeline)?.[0]
+  const pipeline = (o.gaming
+    ? rememberedChoices(PREF.gaming_pipeline)
+    : rememberedChoices(PREF.pipeline))?.[0]
   if (pipeline && !o.sport && !o.gaming_scoring) o.pipeline = pipeline
   for (const step of MOMENT_STEPS) {
     const list = rememberedChoices(PREF[step])
@@ -358,7 +361,7 @@ function copyable(o: JobOptions): JobOptions {
 /** A Pipeline also chosen in a Rate or Understand row is dropped from that
  *  row: the job's own pipeline already describes and scores what it finds,
  *  and the engine refuses the pair. Options without steps come back as they are. */
-function withoutPipelineInSteps(o: JobOptions): JobOptions {
+export function withoutPipelineInSteps(o: JobOptions): JobOptions {
   const id = o.pipeline?.id
   if (!id || !MOMENT_STEPS.some((step) => o[step]?.some((c) => c.id === id))) return o
   const next = { ...o }
@@ -427,7 +430,7 @@ export default function AddVideos({ onAdded }: { onAdded?: () => void }): JSX.El
   // Installed community pipelines that are on; the Pipeline switch shows only
   // when there is one.
   const pipelines = usePipelines()
-  const usable = pipelines ?? []
+  const usable = (pipelines ?? []).filter((p) => p.category !== 'gaming')
   // Installed plugins that can understand or rate moments; the Rate &
   // understand switch shows only when there is one.
   const stepPlugins = useStepPlugins()
@@ -466,6 +469,7 @@ export default function AddVideos({ onAdded }: { onAdded?: () => void }): JSX.El
   useEffect(() => {
     if (!pipelines) return
     forgetGone(PREF.pipeline, pipelines)
+    forgetGone(PREF.gaming_pipeline, pipelines)
     setSlots((prev) =>
       prev.map((s) => {
         const choice = s.options.pipeline
@@ -690,7 +694,7 @@ export default function AddVideos({ onAdded }: { onAdded?: () => void }): JSX.El
     } else if (key === 'edit') {
       // The first plugin that can suggest edits. The video's own Pipeline
       // may be it: a find run is never asked to edit.
-      const first = editUsable[0]
+      const first = editUsable.find((p) => next.gaming || p.category !== 'gaming')
       if (on && !next.edit?.length && first) next.edit = [{ id: first.id }]
       else if (!on) delete next.edit
     } else if (key === 'watermark') {
@@ -745,6 +749,17 @@ export default function AddVideos({ onAdded }: { onAdded?: () => void }): JSX.El
       delete next.gaming_scoring
     } else if (on && (key === 'sport' || key === 'longform') && next.pipeline) {
       delete next.pipeline
+    }
+    if (!next.gaming) {
+      const gamingIds = new Set((pipelines ?? []).filter((p) => p.category === 'gaming').map((p) => p.id))
+      if (next.pipeline && gamingIds.has(next.pipeline.id)) delete next.pipeline
+      for (const step of ['rate', 'understand', 'edit'] as const) {
+        if (next[step]) {
+          const kept = next[step].filter((p) => !gamingIds.has(p.id))
+          if (kept.length) next[step] = kept
+          else delete next[step]
+        }
+      }
     }
     // Rate & understand work on the moments a Shorts run finds, whoever finds
     // them. Longform picks and writes its clips its own way.
@@ -994,11 +1009,13 @@ export default function AddVideos({ onAdded }: { onAdded?: () => void }): JSX.El
                 // while it's on, so it can always be turned off).
                 if (tg.key === 'sport' && offered.length === 0 && !slot.options.sport) return null
                 // Pipeline likewise: only once a community pipeline is installed and on.
-                if (tg.key === 'pipeline' && usable.length === 0 && !slot.options.pipeline) return null
+                if (tg.key === 'pipeline' && (slot.options.gaming || (usable.length === 0 && !slot.options.pipeline))) return null
                 // Rate & understand likewise: once a plugin that can rate or understand is.
                 if (tg.key === 'steps' && stepUsable.length === 0 && !hasSteps(slot.options)) return null
+                if (tg.key === 'steps' && !slot.options.gaming && stepUsable.every((p) => p.category === 'gaming') && !hasSteps(slot.options)) return null
                 // Suggest edits likewise: once a plugin that can suggest edits is.
                 if (tg.key === 'edit' && editUsable.length === 0 && !slot.options.edit?.length) return null
+                if (tg.key === 'edit' && !slot.options.gaming && editUsable.every((p) => p.category === 'gaming') && !slot.options.edit?.length) return null
                 // Watermark needs a saved branding profile to point at. Without
                 // one there is nothing to burn in, so the box could be ticked
                 // and would simply un-tick itself — which reads as a broken
@@ -1078,11 +1095,35 @@ export default function AddVideos({ onAdded }: { onAdded?: () => void }): JSX.El
               </div>
             )}
 
-            {slot.options.pipeline && (
+            {slot.options.gaming && (
+              <div className="flex items-center gap-3 flex-wrap mt-2">
+                <PipelineFields
+                  value={slot.options.pipeline ?? { id: '' }}
+                  pipelines={pipelines?.filter((p) => p.category === 'gaming' || p.id === slot.options.pipeline?.id) ?? null}
+                  label={t('Gaming detector')}
+                  defaultChoiceLabel={t('All games (Clips Kitty)')}
+                  showSettings={false}
+                  name={`${n + 1}`}
+                  onChange={(choice) => {
+                    const next = { ...slot.options }
+                    if (choice.id) {
+                      next.pipeline = choice
+                      delete next.gaming_scoring
+                    } else delete next.pipeline
+                    const done = withoutPipelineInSteps(next)
+                    rememberPlugins(done)
+                    replaceOptions(slot.key, done)
+                  }}
+                  onProblem={(bad) => setBadSettings((b) => ({ ...b, [slot.key]: bad }))}
+                />
+              </div>
+            )}
+
+            {slot.options.pipeline && !slot.options.gaming && (
               <div className="flex items-center gap-3 flex-wrap mt-2">
                 <PipelineFields
                   value={slot.options.pipeline}
-                  pipelines={pipelines}
+                  pipelines={pipelines?.filter((p) => p.category !== 'gaming') ?? null}
                   name={`${n + 1}`}
                   onChange={(pipeline) => patchPipeline(slot.key, pipeline)}
                   onProblem={(bad) => setBadSettings((b) => ({ ...b, [slot.key]: bad }))}

@@ -340,9 +340,16 @@ def process_video(url: str, config: dict, db: StateDB, force: bool = False) -> l
     # the background too — pure network wait, free during transcription.
     # Optional signal: any failure just means no bonus.
     hype_out: dict = {}
-    # A plugin pipeline picks the moments itself, so a gaming layout beside one
-    # gets none of gaming scoring's inputs (they would be read and thrown away).
-    gaming_scoring = modes.gaming_scoring(config) and not config["clips"].get("pipeline")
+    # A game-specific detector keeps Gaming's context and presentation,
+    # while finding moments through its specialized SDK pipeline.
+    gaming_detector = False
+    if modes.is_gaming(config) and config["clips"].get("pipeline"):
+        from plugins import gaming as gaming_plugins
+
+        gaming_detector = gaming_plugins.is_detector(config["clips"]["pipeline"], data_dir)
+    gaming_scoring = modes.gaming_scoring(config) and (
+        not config["clips"].get("pipeline") or gaming_detector
+    )
     # A match (the Sports toggle, sports/): scored for its moments with the
     # same evidence a gaming stream gets, plus the sport's own.
     sport_name = modes.sport(config)
@@ -461,6 +468,11 @@ def process_video(url: str, config: dict, db: StateDB, force: bool = False) -> l
             config["clips"]["pipeline"], video=video, segments=segments, language=content_lang,
             config=find_config, data_dir=data_dir,
         )
+        if gaming_detector:
+            candidates, rejections = gaming_plugins.review(
+                candidates, video=video, segments=segments, llm=llm, config=find_config,
+                profile=gaming_profile, signals=signals_out.get("signals"), chat=chat, sounds=sounds,
+            )
     else:
         intent = clip_direction(config, llm, video.duration)
         candidates, rejections = find_clips(

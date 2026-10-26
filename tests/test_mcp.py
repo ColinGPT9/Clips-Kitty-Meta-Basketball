@@ -85,6 +85,15 @@ def test_no_clips_is_not_confused_with_a_wrong_id(monkeypatch):
     assert "list_videos" in reply["result"]["content"][0]["text"]
 
 
+@pytest.mark.parametrize("start,end,wanted", [
+    (134.54, 172.32, "2m15s-2m52s"), (59.9, 89.9, "1m00s-1m30s"),
+])
+def test_clip_timestamps_round_seconds_without_rounding_minutes_twice(monkeypatch, start, end, wanted):
+    monkeypatch.setattr(mcp, "_request", lambda *_a: [{"id": 1, "start_s": start, "end_s": end, "score": 80}])
+    reply = _send(_request(8, "tools/call", {"name": "list_clips", "arguments": {"video_id": "sample"}}))
+    assert wanted in reply["result"]["content"][0]["text"]
+
+
 def test_a_stopped_engine_is_a_tool_error_not_a_crash(monkeypatch):
     def refuse(*_a, **_k):
         raise urllib.error.URLError("connection refused")
@@ -305,6 +314,23 @@ def test_gaming_reaches_the_engine(monkeypatch):
         "path": "C:/vods/vod.mp4", "gaming": True}}))
     assert sent == [("/jobs", {"url": "https://youtu.be/x", "gaming": True}),
                     ("/videos/local", {"path": "C:/vods/vod.mp4", "gaming": True})]
+
+
+@pytest.mark.parametrize("tool,path_key,endpoint", [
+    ("queue_video", "url", "/jobs"), ("queue_local_file", "path", "/videos/local"),
+])
+def test_gaming_detector_and_layout_reach_the_same_engine_options(monkeypatch, tool, path_key, endpoint):
+    sent = []
+    monkeypatch.setattr(mcp, "_request", lambda m, p, b=None: sent.append((p, b)) or {"job_id": 7})
+    layout = {"preset": "split", "cam": [0.7, 0.1, 0.2, 0.3]}
+    options = {"gaming": True, "pipeline": {"id": "example-dev/quark-game"},
+               "gaming_layout": layout, "captions": False, "max_clips": 2, "min_score": 55, "force": True}
+    args = {path_key: "test-source", **options}
+    result = mcp.handle(_request(35, "tools/call", {"name": tool, "arguments": args}))
+    assert not result["result"]["isError"]
+    assert sent == [(endpoint, args)]
+    schema = next(t for t in mcp.TOOLS if t["name"] == tool)["inputSchema"]["properties"]
+    assert options.keys() <= schema.keys()
 
 
 def test_vertical_live_and_an_original_link_reach_the_engine(monkeypatch):

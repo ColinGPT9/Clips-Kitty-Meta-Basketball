@@ -132,6 +132,45 @@ def test_install_update_turn_off_roll_back_and_remove_through_the_api(api, plugi
     assert again.status_code == 404
 
 
+def test_gaming_detector_keeps_shared_layout_captions_and_plugin_settings(api, plugin_source):
+    client, _ = api
+    manifest = plugin_source.manifest(category="gaming", settings={"threshold": {
+        "type": "number", "default": 0.5, "minimum": 0, "maximum": 1,
+    }})
+    folder = plugin_source.folder("gaming-detector", manifest)
+    plan = client.post("/plugins/plan", json={"source": {"kind": "folder", "path": str(folder)}},
+                       headers=HEADERS).json()
+    assert plan["ok"], plan["errors"]
+    assert client.post("/plugins/install", json={"plan_id": plan["plan_id"]}, headers=HEADERS).status_code == 200
+    response = client.post("/jobs", json={
+        "url": "https://www.youtube.com/watch?v=aB3dEfGhIjK", "gaming": True,
+        "gaming_layout": {"preset": "fullscreen"}, "captions": True,
+        "pipeline": {"id": PID, "settings": {"threshold": 0.7}},
+    })
+    assert response.status_code == 200, response.text
+    payload = json.loads(client.get(f"/jobs/{response.json()['job_id']}").json()["payload"])
+    assert payload["gaming"] is True and payload["captions"] is True
+    assert payload["gaming_layout"]["preset"] == "fullscreen"
+    assert payload["pipeline"] == {"id": PID, "settings": {"threshold": 0.7}}
+    assert not payload.get("gaming_scoring")
+
+
+@pytest.mark.parametrize("step", ["rate", "understand", "edit"])
+def test_gaming_plugins_are_refused_in_sports_steps(api, plugin_source, step):
+    client, _ = api
+    manifest = plugin_source.manifest(category="gaming", inputs=["video", "moments"],
+                                      outputs=["ratings", "context", "edits"])
+    folder = plugin_source.folder("gaming-only", manifest)
+    plan = client.post("/plugins/plan", json={"source": {"kind": "folder", "path": str(folder)}},
+                       headers=HEADERS).json()
+    assert plan["ok"], plan["errors"]
+    assert client.post("/plugins/install", json={"plan_id": plan["plan_id"]}, headers=HEADERS).status_code == 200
+    response = client.post("/jobs", json={"url": "https://www.youtube.com/watch?v=aB3dEfGhIjK",
+                                          "sport": {"name": "basketball"}, step: PID})
+    assert response.status_code == 400
+    assert response.json()["detail"] == f"{step}: gaming detectors can't be used with Sports."
+
+
 def test_a_plan_carries_the_install_screen_as_text(api, plugin_source):
     """The install screen as text, for the SDK's `install` command: what
     permissions.render_text makes of the plan, refused plans included."""

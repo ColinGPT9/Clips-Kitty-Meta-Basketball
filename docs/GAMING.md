@@ -479,3 +479,21 @@ the quicker look (two frames a second) for a camera filling the frame.
   through a small local relay that forces IPv4.
 - **Separate recordings** (the game and the webcam as two files, as some
   recorders make) aren't supported yet.
+
+## Optional game detectors
+
+Installed, enabled SDK pipelines with `category: gaming` appear in the Gaming
+detector dropdown. Choosing one specializes finding and scoring for that game,
+with shared Gaming context, layout, captions, editing and publishing. The
+external detector owns game-specific finding and scoring; the generic Gaming
+finder is not also run. Its windows still go through Gaming's shared visual
+review, using the existing OpenCV activity signals, available screen-text OCR,
+chat/game sound evidence and configured local image model. The usual model
+availability and image-capability checks apply. YOLO webcam detection/tracking
+and rendering use the same Gaming path and settings. Detector defaults are used
+in this flow; selecting a detector installs no additional vision model or FFmpeg.
+
+Other plugin pipelines retain their standalone finder behavior, including when
+a Gaming layout is applied to them. Gaming detectors are not offered in Sports;
+the API rejects their rate/understand/edit steps for Sports. Game-specific
+recognition stays in the external SDK plugin, not in the host.

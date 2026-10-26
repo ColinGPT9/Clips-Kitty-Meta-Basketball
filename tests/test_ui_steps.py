@@ -495,3 +495,13 @@ def test_the_rate_and_understand_switch_reads_as_designed():
     assert "t('Marketplace plugins on this video')" in note
     explained = (UI / "components" / "NoClipsExplanation.tsx").read_text(encoding="utf-8")
     assert "t('Lower the minimum score, or turn off Rate & understand for this video.')" in explained
+
+
+def test_gaming_step_choices_are_only_offered_in_gaming(tmp_path):
+    game = {**_plugin("example-dev/game-detector", ["moments"], ["ratings"]), "category": "gaming"}
+    general = _plugin("example-dev/general-rater", ["moments"], ["ratings"])
+    options = [{"gaming": True}, {"sport": {"name": "basketball"}}, {},
+               {"gaming": True, "sport": {"name": "basketball"}}]
+    got = _run(tmp_path, "return data.options.map(o => m.firstStepPlugin(data.plugins, o)?.id ?? null)",
+               {"plugins": [game, general], "options": options})
+    assert got == [game["id"], general["id"], general["id"], general["id"]]

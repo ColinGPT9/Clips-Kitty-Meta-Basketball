@@ -557,6 +557,13 @@ def _process_options(body, into: dict | None = None, data_dir: Path | None = Non
                 choices = plugin_steps.clean(field, value)
                 if data_dir is not None:
                     plugin_steps.check_installed(data_dir, field, choices)
+                    if getattr(body, "sport", None):
+                        from plugins import store
+
+                        installed = [store.get(data_dir, choice["id"]) for choice in choices]
+                        if any(plugin is not None and plugin.manifest.get("category") == "gaming"
+                               for plugin in installed):
+                            raise ValueError(f"{field}: gaming detectors can't be used with Sports.")
             except ValueError as e:
                 raise HTTPException(400, str(e)) from e
             payload[field] = choices

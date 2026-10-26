@@ -281,10 +281,27 @@ SPORT_PARAM = {
 }
 
 
+PIPELINE_PARAM = {
+    "type": "object",
+    "description": "An installed, enabled SDK pipeline. For a Gaming detector also set gaming=true. Use its actual id, never guess.",
+    "properties": {"id": {"type": "string"}, "settings": {"type": "object"}},
+    "required": ["id"],
+    "additionalProperties": False,
+}
+
+GAMING_LAYOUT_PARAM = {
+    "type": "object",
+    "description": (
+        "The existing Gaming layout and webcam/game boxes, validated by the engine. "
+        "Omit to use Gaming's automatic layout detector. Set only from the user's chosen layout."
+    ),
+}
+
+
 def _queue_video(args: dict) -> str:
     body: dict = {"url": args["url"]}
     for key in ("force", "min_score", "max_clips", "podcast", "vertical_live", "gaming", "long_clips",
-                "captions", "focus", "sport"):
+                "captions", "focus", "sport", "pipeline", "gaming_layout"):
         if args.get(key) is not None:
             body[key] = args[key]
     if args.get("watermark"):
@@ -325,6 +342,9 @@ def _queue_video(args: dict) -> str:
 
 def _queue_local_file(args: dict) -> str:
     body = {"path": args["path"]}
+    for key in ("force", "min_score", "max_clips", "captions", "pipeline", "gaming_layout"):
+        if args.get(key) is not None:
+            body[key] = args[key]
     if args.get("title"):
         body["title"] = args["title"]
     # Worth passing: creator profiles key off the channel, so an empty one means
@@ -402,10 +422,12 @@ def _list_clips(args: dict) -> str:
     lines = []
     for clip in clips:
         start, end = clip.get("start_s", 0), clip.get("end_s", 0)
+        start_minutes, start_seconds = divmod(round(start), 60)
+        end_minutes, end_seconds = divmod(round(end), 60)
         exported = " (exported)" if clip.get("exported_at") else ""
         lines.append(
             f"[{clip['id']}] score {clip.get('score', 0):>3}  "
-            f"{start / 60:.0f}m{start % 60:02.0f}s-{end / 60:.0f}m{end % 60:02.0f}s  "
+            f"{start_minutes}m{start_seconds:02d}s-{end_minutes}m{end_seconds:02d}s  "
             f"{(clip.get('title') or clip.get('hook') or '').strip()[:70]}{exported}"
         )
     return "\n".join(lines)
@@ -962,6 +984,8 @@ TOOLS: list[dict] = [
                 "max_clips": {"type": "integer", "description": "Cap clips from this video"},
                 "focus": FOCUS_PARAM,
                 "sport": SPORT_PARAM,
+                "pipeline": PIPELINE_PARAM,
+                "gaming_layout": GAMING_LAYOUT_PARAM,
                 "podcast": {
                     "type": "boolean",
                     "description": "Multi-camera podcast footage: framing cuts per shot",
@@ -1108,6 +1132,12 @@ TOOLS: list[dict] = [
                 },
                 "focus": FOCUS_PARAM,
                 "sport": SPORT_PARAM,
+                "pipeline": PIPELINE_PARAM,
+                "gaming_layout": GAMING_LAYOUT_PARAM,
+                "force": {"type": "boolean", "description": "Process this file again for an intentional comparison."},
+                "min_score": {"type": "integer", "description": "Quality bar, 0-100"},
+                "max_clips": {"type": "integer", "description": "Cap clips from this video"},
+                "captions": {"type": "boolean", "description": "Burn captions into the clips."},
             },
             "required": ["path"],
         },

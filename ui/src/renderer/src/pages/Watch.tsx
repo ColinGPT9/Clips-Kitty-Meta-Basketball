@@ -7,7 +7,9 @@ import WatchLive from '../components/watch/WatchLive'
 import ConnectedAccountsCard, { type WatchChoices } from '../components/ConnectedAccountsCard'
 import { useWoopAccounts } from '../components/watch/WatchPublishSettings'
 import WatchSchedule, { type ScheduleValue } from '../components/watch/WatchSchedule'
-import { seedOptions } from '../components/queue/AddVideos'
+import { seedOptions, withoutPipelineInSteps } from '../components/queue/AddVideos'
+import PipelineFields from '../components/PipelineFields'
+import { usePipelines } from '../lib/plugins'
 import type { JobOptions } from '../lib/types'
 import { platformLabel, WOOPSOCIAL_PLATFORMS } from '../lib/uploadpost'
 import { t } from '../lib/i18n'
@@ -69,6 +71,7 @@ export default function Watch({
   // How its clips are made: the Generate bar's own settings to start with,
   // which is what "my settings" means everywhere else in the app.
   const [addClip, setAddClip] = useState<JobOptions>(() => seedOptions())
+  const gamingPipelines = usePipelines()
   // The sports the engine offers; the Sports switch shows only when it has one.
   const sports = useSports()
   const offeredSports = sports ?? []
@@ -473,6 +476,26 @@ export default function Watch({
                 sports={offeredSports}
                 onChange={(sport) => setAddClip({ ...addClip, sport })}
                 noCrop={Boolean(addClip.vertical_live)}
+              />
+            </div>
+          )}
+          {addClip.gaming && (
+            <div className="flex items-center gap-3 flex-wrap">
+              <PipelineFields
+                value={addClip.pipeline ?? { id: '' }}
+                pipelines={gamingPipelines?.filter((p) => p.category === 'gaming' || p.id === addClip.pipeline?.id) ?? null}
+                label={t('Gaming detector')}
+                defaultChoiceLabel={t('All games (Clips Kitty)')}
+                showSettings={false}
+                name={t('Watched channel')}
+                onChange={(choice) => {
+                  const next = { ...addClip }
+                  if (choice.id) {
+                    next.pipeline = choice
+                    delete next.gaming_scoring
+                  } else delete next.pipeline
+                  setAddClip(withoutPipelineInSteps(next))
+                }}
               />
             </div>
           )}

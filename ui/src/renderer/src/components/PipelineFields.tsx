@@ -26,7 +26,9 @@ export default function PipelineFields({
   onProblem,
   label,
   missingText,
-  onRemove
+  onRemove,
+  defaultChoiceLabel,
+  showSettings = true
 }: {
   value: PipelineChoice
   /** Null while the engine hasn't said which are installed. */
@@ -41,6 +43,10 @@ export default function PipelineFields({
   missingText?: string
   /** Shows a ✕ that takes this row away. */
   onRemove?: () => void
+  /** An empty selection leaves finding to Clips Kitty's built-in detector. */
+  defaultChoiceLabel?: string
+  /** Gaming uses detector defaults alongside the shared gaming controls. */
+  showSettings?: boolean
 }): JSX.Element {
   const loading = pipelines === null
   const plugin = pipelines?.find((p) => p.id === value.id)
@@ -52,7 +58,7 @@ export default function PipelineFields({
   const current = (n: string, spec: SettingSpec): unknown =>
     value.settings && n in value.settings ? value.settings[n] : spec.default
 
-  const bad = Object.keys(problems).length > 0
+  const bad = showSettings && Object.keys(problems).length > 0
   useEffect(() => {
     onProblem?.(bad)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -91,7 +97,8 @@ export default function PipelineFields({
             onChange({ id: e.target.value })
           }}
         >
-          {!plugin && (
+          {defaultChoiceLabel && <option value="">{defaultChoiceLabel}</option>}
+          {!plugin && value.id && (
             <option value={value.id}>
               {value.id} ({loading ? t('checking…') : t('not available')})
             </option>
@@ -124,7 +131,7 @@ export default function PipelineFields({
           {t('Marketplace')} ↗
         </button>
       </div>
-      {!plugin && !loading && (
+      {!plugin && !loading && value.id && (
         <p className="text-xs text-error">
           {missingText ?? t('This pipeline isn’t installed and turned on any more. Choose another, or untick Pipeline.')}
         </p>
@@ -137,7 +144,7 @@ export default function PipelineFields({
       {plugin && plugin.details.secrets.some((s) => !plugin.secrets_set.includes(s)) && (
         <p className="text-xs text-warn">{t('It needs a key you haven’t added. Add it in Marketplace → Installed.')}</p>
       )}
-      {fields.length > 0 && (
+      {showSettings && fields.length > 0 && (
         <div className="flex items-start gap-4 flex-wrap">
           {fields.map(([n, spec]) => {
             const v = current(n, spec)
