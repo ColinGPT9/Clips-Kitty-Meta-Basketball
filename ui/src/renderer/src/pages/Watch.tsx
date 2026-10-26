@@ -486,6 +486,7 @@ export default function Watch({
                 pipelines={gamingPipelines?.filter((p) => p.category === 'gaming' || p.id === addClip.pipeline?.id) ?? null}
                 label={t('Gaming detector')}
                 defaultChoiceLabel={t('All games (Clips Kitty)')}
+                showSettings={false}
                 name={t('Watched channel')}
                 onChange={(choice) => {
                   const next = { ...addClip }

@@ -27,7 +27,8 @@ export default function PipelineFields({
   label,
   missingText,
   onRemove,
-  defaultChoiceLabel
+  defaultChoiceLabel,
+  showSettings = true
 }: {
   value: PipelineChoice
   /** Null while the engine hasn't said which are installed. */
@@ -44,6 +45,8 @@ export default function PipelineFields({
   onRemove?: () => void
   /** An empty selection leaves finding to Clips Kitty's built-in detector. */
   defaultChoiceLabel?: string
+  /** Gaming uses detector defaults alongside the shared gaming controls. */
+  showSettings?: boolean
 }): JSX.Element {
   const loading = pipelines === null
   const plugin = pipelines?.find((p) => p.id === value.id)
@@ -141,7 +144,7 @@ export default function PipelineFields({
       {plugin && plugin.details.secrets.some((s) => !plugin.secrets_set.includes(s)) && (
         <p className="text-xs text-warn">{t('It needs a key you haven’t added. Add it in Marketplace → Installed.')}</p>
       )}
-      {fields.length > 0 && (
+      {showSettings && fields.length > 0 && (
         <div className="flex items-start gap-4 flex-wrap">
           {fields.map(([n, spec]) => {
             const v = current(n, spec)

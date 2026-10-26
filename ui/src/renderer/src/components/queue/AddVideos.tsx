@@ -250,7 +250,9 @@ function startingOptions(): JobOptions {
   if (o.longform) return o
   const edit = rememberedChoices(PREF.edit)
   if (edit) o.edit = edit
-  const pipeline = rememberedChoices(o.gaming ? PREF.gaming_pipeline : PREF.pipeline)?.[0]
+  const pipeline = (o.gaming
+    ? rememberedChoices(PREF.gaming_pipeline)
+    : rememberedChoices(PREF.pipeline))?.[0]
   if (pipeline && !o.sport && !o.gaming_scoring) o.pipeline = pipeline
   for (const step of MOMENT_STEPS) {
     const list = rememberedChoices(PREF[step])
@@ -1087,6 +1089,7 @@ export default function AddVideos({ onAdded }: { onAdded?: () => void }): JSX.El
                   pipelines={pipelines?.filter((p) => p.category === 'gaming' || p.id === slot.options.pipeline?.id) ?? null}
                   label={t('Gaming detector')}
                   defaultChoiceLabel={t('All games (Clips Kitty)')}
+                  showSettings={false}
                   name={`${n + 1}`}
                   onChange={(choice) => {
                     const next = { ...slot.options }
