@@ -85,6 +85,15 @@ def test_no_clips_is_not_confused_with_a_wrong_id(monkeypatch):
     assert "list_videos" in reply["result"]["content"][0]["text"]
 
 
+@pytest.mark.parametrize("start,end,wanted", [
+    (134.54, 172.32, "2m15s-2m52s"), (59.9, 89.9, "1m00s-1m30s"),
+])
+def test_clip_timestamps_round_seconds_without_rounding_minutes_twice(monkeypatch, start, end, wanted):
+    monkeypatch.setattr(mcp, "_request", lambda *_a: [{"id": 1, "start_s": start, "end_s": end, "score": 80}])
+    reply = _send(_request(8, "tools/call", {"name": "list_clips", "arguments": {"video_id": "sample"}}))
+    assert wanted in reply["result"]["content"][0]["text"]
+
+
 def test_a_stopped_engine_is_a_tool_error_not_a_crash(monkeypatch):
     def refuse(*_a, **_k):
         raise urllib.error.URLError("connection refused")

@@ -422,10 +422,12 @@ def _list_clips(args: dict) -> str:
     lines = []
     for clip in clips:
         start, end = clip.get("start_s", 0), clip.get("end_s", 0)
+        start_minutes, start_seconds = divmod(round(start), 60)
+        end_minutes, end_seconds = divmod(round(end), 60)
         exported = " (exported)" if clip.get("exported_at") else ""
         lines.append(
             f"[{clip['id']}] score {clip.get('score', 0):>3}  "
-            f"{start / 60:.0f}m{start % 60:02.0f}s-{end / 60:.0f}m{end % 60:02.0f}s  "
+            f"{start_minutes}m{start_seconds:02d}s-{end_minutes}m{end_seconds:02d}s  "
             f"{(clip.get('title') or clip.get('hook') or '').strip()[:70]}{exported}"
         )
     return "\n".join(lines)
