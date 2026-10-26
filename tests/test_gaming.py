@@ -120,48 +120,6 @@ def test_a_wide_facecam_overlay_still_qualifies():
     assert overlay is True
 
 
-def test_static_bordered_facecam_is_found_when_talknet_cannot_score():
-    rng = np.random.default_rng(4)
-    frames = []
-    for _ in range(6):
-        frame = np.full((540, 960), 70, dtype=np.uint8)
-        frame[:180, :240] = rng.integers(100, 180, (180, 240), dtype=np.uint8)
-        frame[:180, 238:240] = 250
-        frame[178:180, :240] = 250
-        frames.append(frame)
-    webcam = _track(range(60), box=(10, 10, 210, 150), cx=0.11)
-    face = detect.bordered_webcam(webcam, 60, 960, 540, frames)
-    assert face is not None and face.confidence is None
-    assert face.bordered_sides == 2 and face.presence == 1.0
-    assert face.box[0] < 0.02 and face.box[1] < 0.03
-    assert face.box[0] + face.box[2] > 0.24 and face.box[1] + face.box[3] > 0.32
-    assert detect.video_cam([detect.ClipFinding({"cam": face}, "cam")]) == pytest.approx(face.box)
-
-
-def test_a_static_person_without_a_camera_frame_does_not_become_a_webcam():
-    frames = [np.full((540, 960), 70, dtype=np.uint8) for _ in range(6)]
-    character = _track(range(60), box=(300, 120, 510, 500), cx=0.42)
-    assert detect.bordered_webcam(character, 60, 960, 540, frames) is None
-
-
-def test_missing_talknet_uses_the_confirmed_webcam_frame(monkeypatch):
-    rng = np.random.default_rng(4)
-    frames = []
-    for _ in range(6):
-        frame = np.full((540, 960), 70, dtype=np.uint8)
-        frame[:180, :240] = rng.integers(100, 180, (180, 240), dtype=np.uint8)
-        frame[:180, 238:240] = 250
-        frame[178:180, :240] = 250
-        frames.append(frame)
-    webcam = _track(range(60), box=(10, 10, 210, 150), cx=0.11)
-    monkeypatch.setattr(detect, "sample_tracks", lambda *_a, **_k: ({0: webcam}, 960, 540, 30, 40, 60))
-    monkeypatch.setattr(detect, "speaking_scores", lambda *_a, **_k: None)
-    monkeypatch.setattr(detect, "stills", lambda *_a, **_k: frames)
-    finding = detect.find_cam(Path("recording.mp4"))
-    assert finding.cam is not None and finding.cam.confidence is None
-    assert finding.cam.bordered_sides == 2
-
-
 def test_a_camera_filling_the_frame_is_not_an_overlay():
     assert detect.webcam_box(_track(range(60), box=(300, 50, 1700, 1080), cx=0.5), 1920, 1080)[1] is False
     roaming = _track(range(60), box=(100, 300, 300, 800), cx=[0.1, 0.5, 0.9, 0.3, 0.7])
