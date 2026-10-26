@@ -342,8 +342,13 @@ def process_video(url: str, config: dict, db: StateDB, force: bool = False) -> l
     hype_out: dict = {}
     # Under Gaming an installed detector supplements the built-in finder, so
     # game sounds, chat and the normal gaming profile still contribute.
+    gaming_detector = False
+    if modes.is_gaming(config) and config["clips"].get("pipeline"):
+        from plugins import gaming as gaming_plugins
+
+        gaming_detector = gaming_plugins.is_detector(config["clips"]["pipeline"], data_dir)
     gaming_scoring = modes.gaming_scoring(config) and (
-        not config["clips"].get("pipeline") or modes.is_gaming(config)
+        not config["clips"].get("pipeline") or gaming_detector
     )
     # A match (the Sports toggle, sports/): scored for its moments with the
     # same evidence a gaming stream gets, plus the sport's own.
@@ -453,7 +458,6 @@ def process_video(url: str, config: dict, db: StateDB, force: bool = False) -> l
         from plugins import steps as plugin_steps
 
         find_config = plugin_steps.shortlist_config(config)
-    gaming_detector = bool(config["clips"].get("pipeline") and modes.is_gaming(config))
     if config["clips"].get("pipeline") and not gaming_detector:
         # A plugin pipeline (plugins/) picks the moments in its own process;
         # titles, rendering and the library below are made as for any job.

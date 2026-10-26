@@ -7,6 +7,16 @@ stays in the external SDK pipeline. Existing Gaming moments retain priority.
 from analysis.highlights import _select_unique
 
 
+def is_detector(choice, data_dir):
+    from plugins import store
+
+    try:
+        installed = store.get(data_dir, store.clean_choice(choice)["id"])
+    except ValueError:
+        return False
+    return installed is not None and installed.manifest.get("category") == "gaming"
+
+
 def supplement(candidates, additions, segments, config):
     if not additions:
         return candidates, []

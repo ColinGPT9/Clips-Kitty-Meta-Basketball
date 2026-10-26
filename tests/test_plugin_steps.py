@@ -794,11 +794,15 @@ def made(monkeypatch, tmp_path, data_dir):
     return run
 
 
-def test_gaming_detector_supplements_normal_finding_through_the_pipeline(made, monkeypatch):
+def test_gaming_detector_supplements_normal_finding_through_the_pipeline(made, monkeypatch, data_dir, plugin_source):
     import core.pipeline as pipeline
-    from plugins import runner
+    from plugins import manager, runner
 
     calls = []
+    folder = plugin_source.folder("gaming-extra", plugin_source.manifest(id="fixture-dev/gaming-extra", category="gaming"))
+    plan = manager.plan(data_dir, {"kind": "folder", "path": str(folder)})
+    assert plan["ok"], plan["errors"]
+    manager.install(data_dir, plan["plan_id"])
     monkeypatch.setattr(pipeline, "_gaming_scoring_inputs", lambda *_a, **_k: (calls.append("gaming") or None, None, None))
     monkeypatch.setattr(runner, "find_clips", lambda *_a, **_k: [_cand(100, 85)])
     rows, renders, _, _ = made([_cand(10, 75)], gaming=True,

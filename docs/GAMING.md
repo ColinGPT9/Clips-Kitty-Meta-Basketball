@@ -479,3 +479,16 @@ the quicker look (two frames a second) for a camera filling the frame.
   through a small local relay that forces IPv4.
 - **Separate recordings** (the game and the webcam as two files, as some
   recorders make) aren't supported yet.
+
+## Optional game detectors
+
+Installed, enabled SDK pipelines with `category: gaming` appear in the Gaming
+detector dropdown. Choosing one keeps normal Gaming finding, chat, audio,
+vision checks, layout, captions and publishing, and adds its unique candidates
+within the same quality and count limits. The normal Gaming moments retain
+priority during deduplication. Detector defaults are used in this flow.
+
+Other plugin pipelines retain their standalone finder behavior, including when
+a Gaming layout is applied to them. Gaming detectors are not offered in Sports;
+the API rejects their rate/understand/edit steps for Sports. Game-specific
+recognition stays in the external SDK plugin, not in the host.

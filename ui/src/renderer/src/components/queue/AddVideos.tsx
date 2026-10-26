@@ -1011,9 +1011,11 @@ export default function AddVideos({ onAdded }: { onAdded?: () => void }): JSX.El
                 // Pipeline likewise: only once a community pipeline is installed and on.
                 if (tg.key === 'pipeline' && (slot.options.gaming || (usable.length === 0 && !slot.options.pipeline))) return null
                 // Rate & understand likewise: once a plugin that can rate or understand is.
-                if (tg.key === 'steps' && !stepUsable.some((p) => slot.options.gaming || p.category !== 'gaming') && !hasSteps(slot.options)) return null
+                if (tg.key === 'steps' && stepUsable.length === 0 && !hasSteps(slot.options)) return null
+                if (tg.key === 'steps' && !slot.options.gaming && stepUsable.every((p) => p.category === 'gaming') && !hasSteps(slot.options)) return null
                 // Suggest edits likewise: once a plugin that can suggest edits is.
-                if (tg.key === 'edit' && !editUsable.some((p) => slot.options.gaming || p.category !== 'gaming') && !slot.options.edit?.length) return null
+                if (tg.key === 'edit' && editUsable.length === 0 && !slot.options.edit?.length) return null
+                if (tg.key === 'edit' && !slot.options.gaming && editUsable.every((p) => p.category === 'gaming') && !slot.options.edit?.length) return null
                 // Watermark needs a saved branding profile to point at. Without
                 // one there is nothing to burn in, so the box could be ticked
                 // and would simply un-tick itself — which reads as a broken
