@@ -104,22 +104,6 @@ def test_a_speaker_inside_a_small_box_is_an_overlay():
     assert 0 <= x < 0.06 and w < 0.2 and h < 0.4
 
 
-def test_a_tall_narrow_gta_character_is_not_a_webcam_overlay():
-    """A small area alone let a full-height GTA character become the cam pane."""
-    character = _track(range(60), box=(332, 319, 599, 1074), cx=0.43)
-    box, overlay = detect.webcam_box(character, 1280, 1080)
-    assert box[2] * box[3] < detect.OVERLAY_MAX_AREA
-    assert box[2] / box[3] < detect.OVERLAY_MIN_ASPECT
-    assert overlay is False
-
-
-def test_a_wide_facecam_overlay_still_qualifies():
-    webcam = _track(range(60), box=(0, 14, 300, 239), cx=0.16)
-    box, overlay = detect.webcam_box(webcam, 1280, 720)
-    assert box[2] / box[3] > detect.OVERLAY_MIN_ASPECT
-    assert overlay is True
-
-
 def test_a_camera_filling_the_frame_is_not_an_overlay():
     assert detect.webcam_box(_track(range(60), box=(300, 50, 1700, 1080), cx=0.5), 1920, 1080)[1] is False
     roaming = _track(range(60), box=(100, 300, 300, 800), cx=[0.1, 0.5, 0.9, 0.3, 0.7])

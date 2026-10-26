@@ -79,13 +79,6 @@ CAMERA_CONFIDENCE = 0.0
 MERGE_IOU = 0.5
 # An overlay webcam is small...
 OVERLAY_MAX_AREA = 0.35
-# The box above is the detected person, not the webcam frame. A 3D game
-# character can be small enough to fit the area limit while standing almost
-# the full height of the screen (as in GTA RP). Real streamer facecam people
-# are normally a head-and-shoulders shape. Keep unusually tall, narrow people
-# from voting for the webcam; otherwise the split renderer magnifies the
-# character as the facecam pane. Wide portrait facecams still fit comfortably.
-OVERLAY_MIN_ASPECT = 0.35      # person width / height
 # ...and the streamer's head stays inside it: its spread over the clip is at
 # most this fraction of the box width. A camera filling the frame fails one.
 OVERLAY_SPREAD = 0.35
@@ -360,9 +353,8 @@ def webcam_box(track: Track, w: int, h: int) -> tuple[tuple, bool]:
     y1, y2 = max(0.0, y1), min(float(h), y2)
     box = (x1 / w, y1 / h, (x2 - x1) / w, (y2 - y1) / h)
     small = box[2] * box[3] <= OVERLAY_MAX_AREA
-    facecam_shape = box[2] / max(box[3], 1e-9) >= OVERLAY_MIN_ASPECT
     contained = bool(track.head_cx) and float(np.std(track.head_cx)) <= OVERLAY_SPREAD * box[2]
-    return tuple(float(v) for v in box), bool(small and facecam_shape and contained)
+    return tuple(float(v) for v in box), bool(small and contained)
 
 
 def judge(tracks: dict, n_samples: int, w: int, h: int, scored) -> ClipFinding:
