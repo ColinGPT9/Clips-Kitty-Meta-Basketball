@@ -190,6 +190,7 @@ const PREF = {
   // Pipeline (a list of one) and Rate & understand's two steps (#138).
   edit: 'generate-edit',
   pipeline: 'generate-pipeline',
+  gaming_pipeline: 'generate-gaming-pipeline',
   rate: 'generate-rate',
   understand: 'generate-understand'
 } as const
@@ -236,7 +237,7 @@ function forgetGone(key: string, able: InstalledPlugin[]): void {
 /** Remember the plugins a row has now: its Pipeline and its Rate &
  *  understand steps, for the next video. */
 function rememberPlugins(o: JobOptions): void {
-  rememberChoices(PREF.pipeline, o.pipeline ? [o.pipeline] : null)
+  rememberChoices(o.gaming ? PREF.gaming_pipeline : PREF.pipeline, o.pipeline ? [o.pipeline] : null)
   for (const step of MOMENT_STEPS) rememberChoices(PREF[step], o[step])
 }
 
@@ -249,7 +250,7 @@ function startingOptions(): JobOptions {
   if (o.longform) return o
   const edit = rememberedChoices(PREF.edit)
   if (edit) o.edit = edit
-  const pipeline = rememberedChoices(PREF.pipeline)?.[0]
+  const pipeline = rememberedChoices(o.gaming ? PREF.gaming_pipeline : PREF.pipeline)?.[0]
   if (pipeline && !o.sport && !o.gaming_scoring) o.pipeline = pipeline
   for (const step of MOMENT_STEPS) {
     const list = rememberedChoices(PREF[step])
@@ -358,7 +359,7 @@ function copyable(o: JobOptions): JobOptions {
 /** A Pipeline also chosen in a Rate or Understand row is dropped from that
  *  row: the job's own pipeline already describes and scores what it finds,
  *  and the engine refuses the pair. Options without steps come back as they are. */
-function withoutPipelineInSteps(o: JobOptions): JobOptions {
+export function withoutPipelineInSteps(o: JobOptions): JobOptions {
   const id = o.pipeline?.id
   if (!id || !MOMENT_STEPS.some((step) => o[step]?.some((c) => c.id === id))) return o
   const next = { ...o }
@@ -466,6 +467,7 @@ export default function AddVideos({ onAdded }: { onAdded?: () => void }): JSX.El
   useEffect(() => {
     if (!pipelines) return
     forgetGone(PREF.pipeline, pipelines)
+    forgetGone(PREF.gaming_pipeline, pipelines)
     setSlots((prev) =>
       prev.map((s) => {
         const choice = s.options.pipeline
@@ -994,7 +996,7 @@ export default function AddVideos({ onAdded }: { onAdded?: () => void }): JSX.El
                 // while it's on, so it can always be turned off).
                 if (tg.key === 'sport' && offered.length === 0 && !slot.options.sport) return null
                 // Pipeline likewise: only once a community pipeline is installed and on.
-                if (tg.key === 'pipeline' && usable.length === 0 && !slot.options.pipeline) return null
+                if (tg.key === 'pipeline' && (slot.options.gaming || (usable.length === 0 && !slot.options.pipeline))) return null
                 // Rate & understand likewise: once a plugin that can rate or understand is.
                 if (tg.key === 'steps' && stepUsable.length === 0 && !hasSteps(slot.options)) return null
                 // Suggest edits likewise: once a plugin that can suggest edits is.
@@ -1078,7 +1080,30 @@ export default function AddVideos({ onAdded }: { onAdded?: () => void }): JSX.El
               </div>
             )}
 
-            {slot.options.pipeline && (
+            {slot.options.gaming && (
+              <div className="flex items-center gap-3 flex-wrap mt-2">
+                <PipelineFields
+                  value={slot.options.pipeline ?? { id: '' }}
+                  pipelines={pipelines?.filter((p) => p.category === 'gaming' || p.id === slot.options.pipeline?.id) ?? null}
+                  label={t('Gaming detector')}
+                  defaultChoiceLabel={t('All games (Clips Kitty)')}
+                  name={`${n + 1}`}
+                  onChange={(choice) => {
+                    const next = { ...slot.options }
+                    if (choice.id) {
+                      next.pipeline = choice
+                      delete next.gaming_scoring
+                    } else delete next.pipeline
+                    const done = withoutPipelineInSteps(next)
+                    rememberPlugins(done)
+                    replaceOptions(slot.key, done)
+                  }}
+                  onProblem={(bad) => setBadSettings((b) => ({ ...b, [slot.key]: bad }))}
+                />
+              </div>
+            )}
+
+            {slot.options.pipeline && !slot.options.gaming && (
               <div className="flex items-center gap-3 flex-wrap mt-2">
                 <PipelineFields
                   value={slot.options.pipeline}

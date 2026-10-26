@@ -26,7 +26,8 @@ export default function PipelineFields({
   onProblem,
   label,
   missingText,
-  onRemove
+  onRemove,
+  defaultChoiceLabel
 }: {
   value: PipelineChoice
   /** Null while the engine hasn't said which are installed. */
@@ -41,6 +42,8 @@ export default function PipelineFields({
   missingText?: string
   /** Shows a ✕ that takes this row away. */
   onRemove?: () => void
+  /** An empty selection leaves finding to Clips Kitty's built-in detector. */
+  defaultChoiceLabel?: string
 }): JSX.Element {
   const loading = pipelines === null
   const plugin = pipelines?.find((p) => p.id === value.id)
@@ -91,7 +94,8 @@ export default function PipelineFields({
             onChange({ id: e.target.value })
           }}
         >
-          {!plugin && (
+          {defaultChoiceLabel && <option value="">{defaultChoiceLabel}</option>}
+          {!plugin && value.id && (
             <option value={value.id}>
               {value.id} ({loading ? t('checking…') : t('not available')})
             </option>
@@ -124,7 +128,7 @@ export default function PipelineFields({
           {t('Marketplace')} ↗
         </button>
       </div>
-      {!plugin && !loading && (
+      {!plugin && !loading && value.id && (
         <p className="text-xs text-error">
           {missingText ?? t('This pipeline isn’t installed and turned on any more. Choose another, or untick Pipeline.')}
         </p>
