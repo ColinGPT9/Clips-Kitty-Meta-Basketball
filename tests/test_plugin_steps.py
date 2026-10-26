@@ -794,7 +794,11 @@ def made(monkeypatch, tmp_path, data_dir):
     return run
 
 
-def test_gaming_detector_uses_specialized_finding_with_shared_gaming_features(made, monkeypatch, data_dir, plugin_source):
+@pytest.mark.parametrize("layout", [None, {"preset": "split", "cam": [0.1, 0.1, 0.2, 0.3], "by": "user"}])
+def test_gaming_detector_uses_specialized_finding_with_shared_gaming_features(
+        made, monkeypatch, data_dir, plugin_source, layout):
+    from types import SimpleNamespace
+
     import core.pipeline as pipeline
     from plugins import manager, runner
 
@@ -803,15 +807,31 @@ def test_gaming_detector_uses_specialized_finding_with_shared_gaming_features(ma
     plan = manager.plan(data_dir, {"kind": "folder", "path": str(folder)})
     assert plan["ok"], plan["errors"]
     manager.install(data_dir, plan["plan_id"])
-    monkeypatch.setattr(pipeline, "_gaming_scoring_inputs", lambda *_a, **_k: (calls.append("gaming") or None, None, None))
+    profile = SimpleNamespace(reads_screen=False)
+    monkeypatch.setattr(pipeline, "_gaming_scoring_inputs", lambda *_a, **_k: (calls.append("gaming") or profile, None, None))
     monkeypatch.setattr(pipeline, "find_clips", lambda *_a, **_k: pytest.fail("A specialized detector must own finding"))
     monkeypatch.setattr(runner, "find_clips", lambda *_a, **_k: [_cand(100, 85)])
+    def review(candidates, _path, _llm, given_profile, _segments, _events):
+        assert given_profile is profile
+        calls.append("vision")
+        candidates[0].score += 3
+
+    def prepare(_source, candidates, config, _clip_dir):
+        assert config["clips"].get("gaming_layout") == layout
+        assert [(c.start, c.end) for c in candidates] == [(100, 120)]
+        calls.append("layout")
+        return layout or {"preset": "split", "cam": [0.7, 0.1, 0.2, 0.3], "by": "detector"}
+
+    monkeypatch.setattr("analysis.fusion._look_at_game", review)
+    monkeypatch.setattr("gaming.run.prepare", prepare)
     rows, renders, _, _ = made([_cand(10, 75)], gaming=True,
-                               gaming_layout={"preset": "fullscreen", "by": "user"},
+                               **({"gaming_layout": layout} if layout is not None else {}),
                                pipeline={"id": "fixture-dev/gaming-extra"})
-    assert calls == ["gaming"]
+    assert calls == ["gaming", "vision", "layout"]
     assert [(r["start_s"], r["end_s"]) for r in rows] == [(100, 120)]
     assert [window for window, _ in renders] == [(100, 120)]
+    assert rows[0]["score"] == 88
+    assert renders[0][1]["gaming"] == (layout or {"preset": "split", "cam": [0.7, 0.1, 0.2, 0.3], "by": "detector"})
 
 
 def _found():

@@ -468,6 +468,11 @@ def process_video(url: str, config: dict, db: StateDB, force: bool = False) -> l
             config["clips"]["pipeline"], video=video, segments=segments, language=content_lang,
             config=find_config, data_dir=data_dir,
         )
+        if gaming_detector:
+            candidates, rejections = gaming_plugins.review(
+                candidates, video=video, segments=segments, llm=llm, config=find_config,
+                profile=gaming_profile, signals=signals_out.get("signals"), chat=chat, sounds=sounds,
+            )
     else:
         intent = clip_direction(config, llm, video.duration)
         candidates, rejections = find_clips(

@@ -44,9 +44,10 @@ not something to work around.
 - **A paused queue looks like a broken app.** `queue_status` reports it. Check it before
   telling anyone nothing is happening.
 - **Scores are the model's ranking, 0-100**, not a promise. The user picks what to post.
-- **It is tuned for IRL, talking-head, podcast and gym footage.** Gaming, split-screen and
-  reaction videos produce clips but frame them poorly. Say so rather than letting someone
-  process a three-hour gaming VOD expecting good crops.
+- **Gaming uses its own framing.** Set `gaming=true` for its webcam/game layout and
+  existing layout detector. Omit `gaming_layout` for automatic detection, or pass the
+  user's selected layout and boxes. An installed game-specific detector is chosen with
+  `pipeline={"id":"publisher/name"}`; discovery and permissions remain in the app.
 
 ## What it will not do
 
