@@ -1,9 +1,12 @@
 """Who the streamer is in a gaming video, and where their webcam sits.
 
-TalkNet decides WHO. The streamer is the face that speaks in time with the
-audio. Size never picks the person: that is how earlier versions ended up
-framing a game character, a portrait or the person in a video being reacted
-to (the "largest face" problem TalkNet already fixed in the standard tracker).
+TalkNet decides WHO when it can score a speaker. The streamer is the face that
+speaks in time with the audio. Size never picks the person: that is how earlier
+versions ended up framing a game character, a portrait or the person in a video
+being reacted to (the "largest face" problem TalkNet already fixed in the
+standard tracker). When TalkNet is unavailable, a strict OpenCV border check
+can identify a persistent person inside a visible webcam rectangle; it does not
+guess from size or a static game scene alone.
 
 Measured on real game streams (scripts/gaming_detect_bench.py, docs/GAMING.md),
 TalkNet alone answers "who is speaking in this clip", which is not always the
@@ -29,8 +32,9 @@ box, and its size says whether it is an overlay on the game (a split) or a
 camera filling the frame (not a gaming layout; the standard tracker frames
 that).
 
-Nobody speaking is an answer too: then there is no webcam, and the caller
-falls back to a box the user drew or one saved for the creator. Never to size.
+Nobody speaking is an answer too: then there is no TalkNet webcam vote. A
+visible, bordered facecam can still be used; otherwise the caller falls back
+to a box the user drew or one saved for the creator. Never to size alone.
 
 Isolation: imported only when the Gaming / Split-Screen toggle is on. It reuses
 the tracker's detector, track matching and TalkNet crop read-only, and
@@ -127,6 +131,7 @@ class Face:
     speaking_share: float         # share of loud on-screen moments it is speaking
     confidence: float | None      # median TalkNet logit over those moments
     overlay: bool                 # small and contained: a webcam over the game
+    bordered_sides: int = 0       # OpenCV-confirmed webcam frame edges when TalkNet is unavailable
 
 
 @dataclass
@@ -365,6 +370,35 @@ def webcam_box(track: Track, w: int, h: int) -> tuple[tuple, bool]:
     return tuple(float(v) for v in box), bool(small and facecam_shape and contained)
 
 
+def bordered_webcam(track: Track, n_samples: int, w: int, h: int, frames: list) -> Face | None:
+    """Find a facecam by its visible rectangle when TalkNet cannot choose it.
+
+    YOLO pose supplies a persistent, small, facecam-shaped person track. OpenCV
+    then has to confirm at least two straight overlay borders extending out
+    from that person box. A stationary in-game pedestrian or voiced GTA model
+    has no camera-frame border and is rejected. This is a narrow fallback for
+    recordings without usable audio/speaker detection, not a new region scan.
+    """
+    if not n_samples or len(track.times) / n_samples < 0.7 or not frames:
+        return None
+    box, overlay = webcam_box(track, w, h)
+    if not overlay:
+        return None
+    snapped, sides = snap_details(box, frames)
+    count = sum(sides)
+    x, y, bw, bh = snapped
+    if count < 2 or bw * bh > OVERLAY_MAX_AREA:
+        return None
+    return Face(snapped, len(track.times) / n_samples, 0.0, None, True, count)
+
+
+def _bordered_cam(tracks: dict, ids: list, n_samples: int, w: int, h: int, frames: list):
+    """Return the sole geometrically confirmed webcam; ambiguity fails closed."""
+    found = [(tid, bordered_webcam(tracks[tid], n_samples, w, h, frames)) for tid in ids]
+    found = [(tid, face) for tid, face in found if face is not None]
+    return found[0] if len(found) == 1 else (None, None)
+
+
 def judge(tracks: dict, n_samples: int, w: int, h: int, scored) -> ClipFinding:
     """A ClipFinding from the tracks and TalkNet's scores (see find_cam)."""
     if scored is None:
@@ -386,7 +420,13 @@ def find_cam(clip_path: Path, model_name: str = "yolov8n-pose.pt", sample_fps: f
     ids = candidates(tracks, n_samples)
     if not ids or not w:
         return ClipFinding(reason="nobody on screen for most of the clip")
-    return judge(tracks, n_samples, w, h, speaking_scores(clip_path, tracks, ids, duration, video_fps))
+    finding = judge(tracks, n_samples, w, h, speaking_scores(clip_path, tracks, ids, duration, video_fps))
+    if finding.cam is not None and finding.cam.overlay:
+        return finding
+    tid, face = _bordered_cam(tracks, ids, n_samples, w, h, stills(clip_path))
+    if face is not None:
+        return ClipFinding({tid: face}, tid, "OpenCV confirmed a webcam frame around a persistent YOLO person")
+    return finding
 
 
 # ---- the video ------------------------------------------------------------------------
@@ -405,9 +445,9 @@ def video_cam(findings: list) -> tuple | None:
     (TalkNet's confidence breaks a tie), and it needs more than one vote when
     more than one clip was looked at. In a reaction, the person in the
     watched video can win one clip; the streamer wins the rest from the same
-    corner. And in at least one of its clips TalkNet has to have been sure
-    it is a real person talking (CAMERA_CONFIDENCE): a game character who
-    stands in the same spot and lip-flaps to voice acting is not a webcam.
+    corner. In at least one clip TalkNet must confirm a real person speaking,
+    or OpenCV must confirm two or more edges of a persistent facecam rectangle.
+    A static game character without those borders is not a webcam.
 
     Returns the median normalized (x, y, w, h) box, or None.
     """
@@ -422,10 +462,15 @@ def video_cam(findings: list) -> tuple | None:
             groups.append([face])
     if not groups:
         return None
-    best = max(groups, key=lambda g: (len(g), float(np.mean([f.confidence for f in g]))))
+    best = max(groups, key=lambda g: (
+        len(g), float(np.mean([f.confidence for f in g if f.confidence is not None]))
+        if any(f.confidence is not None for f in g) else -float("inf")
+    ))
     if len(findings) > 1 and len(best) < 2:
         return None
-    if max(f.confidence for f in best) < CAMERA_CONFIDENCE:
+    if (not any(f.bordered_sides >= 2 for f in best)
+            and max((f.confidence for f in best if f.confidence is not None), default=-float("inf"))
+            < CAMERA_CONFIDENCE):
         return None
     return tuple(float(v) for v in np.median(np.array([f.box for f in best]), axis=0))
 
