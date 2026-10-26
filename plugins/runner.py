@@ -136,6 +136,14 @@ def build_job(plugin: store.Installed, choice: dict, *, video, segments, languag
     # when it runs at a cloud provider, whose key is never handed over.
     llm = config.get("llm") or {}
     provider, _, model = str(llm.get("backend") or "").partition("/")
+    local_models = (config.get("plugins") or {}).get("local_models") or {}
+    if not isinstance(local_models, dict):
+        raise PluginError("plugins.local_models must map pipeline IDs to local Ollama models")
+    selected = local_models.get(plugin.id)
+    if selected is not None:
+        if not isinstance(selected, str) or not selected.startswith("ollama/") or not selected[7:].strip():
+            raise PluginError(f"plugins.local_models[{plugin.id!r}] must be an Ollama model: ollama/name:tag")
+        provider, _, model = selected.strip().partition("/")
     ollama = {"host": llm.get("ollama_host", "http://localhost:11434"),
               "model": model if provider == "ollama" else ""}
     try:

@@ -1,5 +1,22 @@
 # Pipeline development
 
+## Choosing an existing local model for a pipeline
+
+The creator can select a local model for one installed pipeline in settings,
+independently of the main AI backend:
+
+```yaml
+plugins:
+  local_models:
+    example-dev/quark-highlights: ollama/existing-model:tag
+```
+
+This is an explicit creator preference, not a plugin setting. It only accepts
+an Ollama model and does not download weights or send a cloud key to a plugin.
+The plugin still needs the `ollama` permission, and SDK requests still enforce
+a loopback address. Without a preference, the main local model is used; a cloud
+main backend supplies no local model. Other pipelines keep their own choice.
+
 A **pipeline plugin** decides which moments of a video become clips. Clips Kitty does everything around that decision exactly as it does for its own modes: downloading, transcribing, writing titles and hashtags with the user's AI model, cropping to vertical, captions, rendering with FFmpeg, the library, publishing and the automation that watches channels. You write the part that knows your niche (a game's kill feed, a sport's scoreboard, a podcast's best exchanges) and nothing else.
 
 Status: **built** in plugin contract 1: the contract, the SDK, the runner in the engine, the job option, the manifest validator and the plugin manager (install from a folder or a Git commit, through experimental API routes). The Marketplace screen in the desktop app (Phase 8) installs and manages plugins, and the Generate bar's **Pipeline** switch picks one for a video. **Planned**: returning finished clip files.
