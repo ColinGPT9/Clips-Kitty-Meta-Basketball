@@ -794,7 +794,7 @@ def made(monkeypatch, tmp_path, data_dir):
     return run
 
 
-def test_gaming_detector_supplements_normal_finding_through_the_pipeline(made, monkeypatch, data_dir, plugin_source):
+def test_gaming_detector_uses_specialized_finding_with_shared_gaming_features(made, monkeypatch, data_dir, plugin_source):
     import core.pipeline as pipeline
     from plugins import manager, runner
 
@@ -804,13 +804,14 @@ def test_gaming_detector_supplements_normal_finding_through_the_pipeline(made, m
     assert plan["ok"], plan["errors"]
     manager.install(data_dir, plan["plan_id"])
     monkeypatch.setattr(pipeline, "_gaming_scoring_inputs", lambda *_a, **_k: (calls.append("gaming") or None, None, None))
+    monkeypatch.setattr(pipeline, "find_clips", lambda *_a, **_k: pytest.fail("A specialized detector must own finding"))
     monkeypatch.setattr(runner, "find_clips", lambda *_a, **_k: [_cand(100, 85)])
     rows, renders, _, _ = made([_cand(10, 75)], gaming=True,
                                gaming_layout={"preset": "fullscreen", "by": "user"},
                                pipeline={"id": "fixture-dev/gaming-extra"})
     assert calls == ["gaming"]
-    assert [(r["start_s"], r["end_s"]) for r in rows] == [(10, 30), (100, 120)]
-    assert [window for window, _ in renders] == [(10, 30), (100, 120)]
+    assert [(r["start_s"], r["end_s"]) for r in rows] == [(100, 120)]
+    assert [window for window, _ in renders] == [(100, 120)]
 
 
 def _found():

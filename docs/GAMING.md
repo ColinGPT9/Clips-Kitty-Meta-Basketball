@@ -483,10 +483,10 @@ the quicker look (two frames a second) for a camera filling the frame.
 ## Optional game detectors
 
 Installed, enabled SDK pipelines with `category: gaming` appear in the Gaming
-detector dropdown. Choosing one keeps normal Gaming finding, chat, audio,
-vision checks, layout, captions and publishing, and adds its unique candidates
-within the same quality and count limits. The normal Gaming moments retain
-priority during deduplication. Detector defaults are used in this flow.
+detector dropdown. Choosing one specializes finding and scoring for that game,
+with shared Gaming context, layout, captions, editing and publishing. The
+external detector owns its evidence and candidate selection; the generic
+Gaming finder is not also run. Detector defaults are used in this flow.
 
 Other plugin pipelines retain their standalone finder behavior, including when
 a Gaming layout is applied to them. Gaming detectors are not offered in Sports;
