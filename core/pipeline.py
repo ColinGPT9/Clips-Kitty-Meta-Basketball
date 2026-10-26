@@ -340,9 +340,11 @@ def process_video(url: str, config: dict, db: StateDB, force: bool = False) -> l
     # the background too — pure network wait, free during transcription.
     # Optional signal: any failure just means no bonus.
     hype_out: dict = {}
-    # A plugin pipeline picks the moments itself, so a gaming layout beside one
-    # gets none of gaming scoring's inputs (they would be read and thrown away).
-    gaming_scoring = modes.gaming_scoring(config) and not config["clips"].get("pipeline")
+    # Under Gaming an installed detector supplements the built-in finder, so
+    # game sounds, chat and the normal gaming profile still contribute.
+    gaming_scoring = modes.gaming_scoring(config) and (
+        not config["clips"].get("pipeline") or modes.is_gaming(config)
+    )
     # A match (the Sports toggle, sports/): scored for its moments with the
     # same evidence a gaming stream gets, plus the sport's own.
     sport_name = modes.sport(config)
@@ -451,7 +453,8 @@ def process_video(url: str, config: dict, db: StateDB, force: bool = False) -> l
         from plugins import steps as plugin_steps
 
         find_config = plugin_steps.shortlist_config(config)
-    if config["clips"].get("pipeline"):
+    gaming_detector = bool(config["clips"].get("pipeline") and modes.is_gaming(config))
+    if config["clips"].get("pipeline") and not gaming_detector:
         # A plugin pipeline (plugins/) picks the moments in its own process;
         # titles, rendering and the library below are made as for any job.
         from plugins import runner as plugin_runner
@@ -477,6 +480,18 @@ def process_video(url: str, config: dict, db: StateDB, force: bool = False) -> l
             **({"intent": intent} if intent is not None else {}),
         )
         candidates = _refine_windows(sport_profile, candidates, video, segments, config)
+    if gaming_detector:
+        # Keep normal Gaming scoring, chat, vision and conversation moments.
+        # The installed detector contributes additional unique game events.
+        from plugins import gaming as gaming_plugins
+        from plugins import runner as plugin_runner
+
+        additions = plugin_runner.find_clips(
+            config["clips"]["pipeline"], video=video, segments=segments, language=content_lang,
+            config=find_config, data_dir=data_dir,
+        )
+        candidates, extra_rejections = gaming_plugins.supplement(candidates, additions, segments, find_config)
+        rejections.extend(extra_rejections)
     step_report = []
     if steps_chosen and candidates:
         candidates, rejections, step_report = plugin_steps.after_finding(

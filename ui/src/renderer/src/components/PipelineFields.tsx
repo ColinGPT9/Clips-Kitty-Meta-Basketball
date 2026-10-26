@@ -58,7 +58,7 @@ export default function PipelineFields({
   const current = (n: string, spec: SettingSpec): unknown =>
     value.settings && n in value.settings ? value.settings[n] : spec.default
 
-  const bad = Object.keys(problems).length > 0
+  const bad = showSettings && Object.keys(problems).length > 0
   useEffect(() => {
     onProblem?.(bad)
     // eslint-disable-next-line react-hooks/exhaustive-deps

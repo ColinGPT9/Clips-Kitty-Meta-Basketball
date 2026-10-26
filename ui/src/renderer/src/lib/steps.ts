@@ -80,9 +80,10 @@ export function editPlugins(plugins: InstalledPlugin[]): InstalledPlugin[] {
  *  the switch disabled, since ticking it could choose nothing. */
 export function firstStepPlugin(
   usable: InstalledPlugin[],
-  o: Pick<JobOptions, 'pipeline'> | null | undefined
+  o: Pick<JobOptions, 'pipeline' | 'gaming' | 'sport'> | null | undefined
 ): InstalledPlugin | undefined {
-  return usable.find((p) => p.id !== o?.pipeline?.id)
+  return usable.find((p) => p.id !== o?.pipeline?.id &&
+    (p.category !== 'gaming' || (o?.gaming && !o?.sport)))
 }
 
 /** Whether a video's options name a step. */

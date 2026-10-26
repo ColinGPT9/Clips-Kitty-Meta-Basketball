@@ -57,7 +57,8 @@ export default function StepFields({
     // The job's own pipeline already describes and scores what it finds: the
     // engine refuses it under Rate & understand. It may suggest edits: a find
     // run is never asked to.
-    const usable = usableFor(plugins ?? [], which).filter((p) => which === 'edit' || p.id !== options.pipeline?.id)
+    const available = (plugins ?? []).filter((p) => p.category !== 'gaming' || (options.gaming && !options.sport))
+    const usable = usableFor(available, which).filter((p) => which === 'edit' || p.id !== options.pipeline?.id)
     const free = usable.filter((p) => !chosen.some((c) => c.id === p.id))
     const words = ROWS[which]
     const add = free.length > 0 && chosen.length < MAX_PER_STEP

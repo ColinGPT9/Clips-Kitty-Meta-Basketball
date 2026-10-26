@@ -430,7 +430,7 @@ export default function AddVideos({ onAdded }: { onAdded?: () => void }): JSX.El
   // Installed community pipelines that are on; the Pipeline switch shows only
   // when there is one.
   const pipelines = usePipelines()
-  const usable = pipelines ?? []
+  const usable = (pipelines ?? []).filter((p) => p.category !== 'gaming')
   // Installed plugins that can understand or rate moments; the Rate &
   // understand switch shows only when there is one.
   const stepPlugins = useStepPlugins()
@@ -694,7 +694,7 @@ export default function AddVideos({ onAdded }: { onAdded?: () => void }): JSX.El
     } else if (key === 'edit') {
       // The first plugin that can suggest edits. The video's own Pipeline
       // may be it: a find run is never asked to edit.
-      const first = editUsable[0]
+      const first = editUsable.find((p) => next.gaming || p.category !== 'gaming')
       if (on && !next.edit?.length && first) next.edit = [{ id: first.id }]
       else if (!on) delete next.edit
     } else if (key === 'watermark') {
@@ -749,6 +749,17 @@ export default function AddVideos({ onAdded }: { onAdded?: () => void }): JSX.El
       delete next.gaming_scoring
     } else if (on && (key === 'sport' || key === 'longform') && next.pipeline) {
       delete next.pipeline
+    }
+    if (!next.gaming) {
+      const gamingIds = new Set((pipelines ?? []).filter((p) => p.category === 'gaming').map((p) => p.id))
+      if (next.pipeline && gamingIds.has(next.pipeline.id)) delete next.pipeline
+      for (const step of ['rate', 'understand', 'edit'] as const) {
+        if (next[step]) {
+          const kept = next[step].filter((p) => !gamingIds.has(p.id))
+          if (kept.length) next[step] = kept
+          else delete next[step]
+        }
+      }
     }
     // Rate & understand work on the moments a Shorts run finds, whoever finds
     // them. Longform picks and writes its clips its own way.
@@ -1000,9 +1011,9 @@ export default function AddVideos({ onAdded }: { onAdded?: () => void }): JSX.El
                 // Pipeline likewise: only once a community pipeline is installed and on.
                 if (tg.key === 'pipeline' && (slot.options.gaming || (usable.length === 0 && !slot.options.pipeline))) return null
                 // Rate & understand likewise: once a plugin that can rate or understand is.
-                if (tg.key === 'steps' && stepUsable.length === 0 && !hasSteps(slot.options)) return null
+                if (tg.key === 'steps' && !stepUsable.some((p) => slot.options.gaming || p.category !== 'gaming') && !hasSteps(slot.options)) return null
                 // Suggest edits likewise: once a plugin that can suggest edits is.
-                if (tg.key === 'edit' && editUsable.length === 0 && !slot.options.edit?.length) return null
+                if (tg.key === 'edit' && !editUsable.some((p) => slot.options.gaming || p.category !== 'gaming') && !slot.options.edit?.length) return null
                 // Watermark needs a saved branding profile to point at. Without
                 // one there is nothing to burn in, so the box could be ticked
                 // and would simply un-tick itself — which reads as a broken
@@ -1110,7 +1121,7 @@ export default function AddVideos({ onAdded }: { onAdded?: () => void }): JSX.El
               <div className="flex items-center gap-3 flex-wrap mt-2">
                 <PipelineFields
                   value={slot.options.pipeline}
-                  pipelines={pipelines}
+                  pipelines={pipelines?.filter((p) => p.category !== 'gaming') ?? null}
                   name={`${n + 1}`}
                   onChange={(pipeline) => patchPipeline(slot.key, pipeline)}
                   onProblem={(bad) => setBadSettings((b) => ({ ...b, [slot.key]: bad }))}
