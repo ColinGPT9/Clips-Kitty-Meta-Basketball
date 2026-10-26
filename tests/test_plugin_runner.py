@@ -267,6 +267,37 @@ def test_a_cloud_model_is_never_named_to_a_plugin(tmp_path, install_plugin, vide
     assert _seen(data_dir)["job"]["tools"]["ollama"]["model"] == ""
 
 
+def test_creator_can_select_an_existing_local_model_for_one_pipeline(tmp_path, install_plugin, video):
+    folder = tmp_path / "echo"
+    shutil.copytree(ECHO, folder)
+    manifest = (folder / "clipskitty.yaml").read_text(encoding="utf-8")
+    (folder / "clipskitty.yaml").write_text(manifest.replace("transcript.read, ffmpeg]", "ollama]"), encoding="utf-8")
+    data_dir = tmp_path / "data"
+    install_plugin(data_dir, folder)
+    config = _config()
+    config["llm"]["backend"] = "openrouter/some-model"
+    config["llm"]["api_key"] = "not-a-real-cloud-key"
+    config["plugins"] = {"local_models": {"fixture-dev/echo": "ollama/existing-local:tag"}}
+    _run(data_dir, video, {"ranges": ""}, config=config)
+    job = _seen(data_dir)["job"]
+    assert job["tools"]["ollama"]["model"] == "existing-local:tag"
+    assert "not-a-real-cloud-key" not in json.dumps(job)
+    assert config["llm"]["backend"] == "openrouter/some-model"
+    config["plugins"]["local_models"] = {"someone-else/other": "ollama/another:tag"}
+    _run(data_dir, video, {"ranges": ""}, config=config)
+    assert _seen(data_dir)["job"]["tools"]["ollama"]["model"] == ""
+
+
+@pytest.mark.parametrize("choice", ["openrouter/cloud-model", "ollama/", 12, {"model": "other"}])
+def test_pipeline_local_model_preference_cannot_select_a_cloud_backend(echo, video, choice):
+    from plugins import runner
+
+    config = _config()
+    config["plugins"] = {"local_models": {"fixture-dev/echo": choice}}
+    with pytest.raises(runner.PluginError, match="must be an Ollama model"):
+        _run(echo, video, {"ranges": ""}, config=config)
+
+
 def test_the_process_gets_no_clips_kitty_settings_or_credentials(echo, video, monkeypatch):
     monkeypatch.setenv("CLIPS_STUDIO_OLLAMA_HOST", "http://127.0.0.1:9999")
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-not-a-real-key")

@@ -17,8 +17,8 @@
      "archived": false,
      "discussions": 1,
      "has_discussions": true,
-     "pushed_at": "2026-10-19",
-     "stars": 121
+     "pushed_at": "2026-10-26",
+     "stars": 152
     }
    },
    "name": "Clips Kitty MCP server and agent skill",
@@ -97,8 +97,8 @@
      "archived": false,
      "discussions": 1,
      "has_discussions": true,
-     "pushed_at": "2026-10-19",
-     "stars": 121
+     "pushed_at": "2026-10-26",
+     "stars": 152
     }
    },
    "name": "Clips Kitty SDK for Python",
@@ -125,7 +125,7 @@
   }
  ],
  "format": 1,
- "metrics_at": "2026-10-19",
+ "metrics_at": "2026-10-26",
  "plugins": [
   {
    "added": "2026-10-07",
@@ -165,8 +165,8 @@
      "archived": false,
      "discussions": 1,
      "has_discussions": true,
-     "pushed_at": "2026-10-19",
-     "stars": 121
+     "pushed_at": "2026-10-26",
+     "stars": 152
     }
    },
    "name": "Loud moments, cut on scene changes (example)",
@@ -274,7 +274,7 @@
     "public_at_commit": true,
     "publisher_is_repository_owner": true
    },
-   "description": "An unofficial, independently developed GTA-style highlight pipeline. Finds explicit chase, crash, stunt, combat, dialogue and reaction cues in the host transcript, corroborated by measured picture and sound changes and permitted viewer nominations. It does not recognize vehicles or police from pixels and has not been validated on GTA VI gameplay. Rendering stays in Clips Kitty.\n",
+   "description": "An unofficial, independently developed GTA-style highlight pipeline. Finds explicit chase, crash, stunt, combat and reaction cues, plus source-grounded dialogue suggestions from the existing local model. Uses the host transcript, measured picture and sound changes and permitted viewer nominations. It does not recognize vehicles or police from pixels and has not been validated on GTA VI gameplay. Rendering stays in Clips Kitty.\n",
    "events": [
     "chase",
     "crash",
@@ -298,9 +298,16 @@
     "moments"
    ],
    "kind": "pipeline",
-   "latest": "0.3.0",
+   "latest": "0.4.1",
    "license": "MIT",
-   "metrics": {},
+   "metrics": {
+    "github": {
+     "archived": false,
+     "has_discussions": false,
+     "pushed_at": "2026-10-26",
+     "stars": 1
+    }
+   },
    "name": "Grand Theft Auto 6 Clips Kitty Plugin",
    "network": [],
    "outputs": [
@@ -371,7 +378,7 @@
      "type": "number"
     },
     "roleplay_enabled": {
-     "title": "This source actually contains roleplay",
+     "title": "Include supported GTA roleplay interactions",
      "type": "boolean"
     },
     "sample_fps": {
@@ -387,7 +394,7 @@
      "type": "boolean"
     },
     "use_local_model": {
-     "title": "Ask the existing local model to review grounded candidates",
+     "title": "Use the existing local model for review and grounded dialogue",
      "type": "boolean"
     },
     "use_media": {
@@ -404,6 +411,21 @@
     }
    },
    "versions": [
+    {
+     "commit": "f1176c632acec146be70b60568e7c7b88abe286d",
+     "permissions": [
+      "video.read",
+      "transcript.read",
+      "ffmpeg",
+      "ollama",
+      "twitch.context.read"
+     ],
+     "requires": {
+      "clips_kitty": ">=2.1.0",
+      "plugin_api": 1
+     },
+     "version": "0.4.1"
+    },
     {
      "commit": "229d53434262305a3c5222b4834b33311eee207f",
      "permissions": [
