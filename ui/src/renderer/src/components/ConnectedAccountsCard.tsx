@@ -8,6 +8,7 @@ import {
   isTransientAccountError,
   streamWorkflows,
   twitchActivationUrl,
+  twitchChannelLogin,
   type AccountFlow,
   type ConnectedAccount,
   type ConnectedAccountsStatus,
@@ -16,6 +17,8 @@ import {
 import { t } from '../lib/i18n'
 import type { JobOptions, WatchPublish } from '../lib/types'
 import { seedOptions } from './queue/AddVideos'
+import RecordingBindingCard from './RecordingBindingCard'
+import TwitchActivity from './TwitchActivity'
 
 const TWITCH_APPS = 'https://dev.twitch.tv/console/apps'
 // What Twitch's console shows; anything else (a full stop, a quote, a hyphen)
@@ -91,6 +94,8 @@ export default function ConnectedAccountsCard({
   const [loadError, setLoadError] = useState('')
   const [nominationStatus, setNominationStatus] = useState<Record<string, ViewerNominationStatus>>({})
   const [nominationErrors, setNominationErrors] = useState<Record<string, string>>({})
+  const [channelNames, setChannelNames] = useState<Record<string, string>>({})
+  const [collectionChannels, setCollectionChannels] = useState<Record<string, string>>({})
   const mounted = useRef(false)
   const activeFlow = useRef<string | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -165,6 +170,14 @@ export default function ConnectedAccountsCard({
       if (id) void connectedAccounts.cancel(id).catch(() => {})
     }
   }, [load])
+
+  const needsNominationRefresh = Object.values(nominationStatus).some((status) =>
+    status.monitoring || status.streams.some((stream) => stream.recording?.status === 'pending'))
+  useEffect(() => {
+    if (!needsNominationRefresh) return
+    const refresh = setInterval(() => { void load() }, 15000)
+    return () => clearInterval(refresh)
+  }, [load, needsNominationRefresh])
 
   const stopFlow = useCallback((): void => {
     if (timer.current) clearTimeout(timer.current)
@@ -309,11 +322,17 @@ export default function ConnectedAccountsCard({
   })
 
   const monitor = (account: ConnectedAccount, start: boolean): Promise<void> => act(async () => {
-    if (start) await streamWorkflows.startMonitor(account.id)
-    else await streamWorkflows.stopMonitor(account.id)
+    if (start) {
+      const login = twitchChannelLogin(
+        channelNames[account.id] ?? nominationStatus[account.id]?.broadcaster_login ?? account.login)
+      if (!login) throw new Error(t('Enter a Twitch channel name or channel URL.'))
+      const context = await connectedAccounts.streamContext(account.id, login)
+      await streamWorkflows.startMonitor(account.id, context.broadcaster.id)
+      if (mounted.current) setCollectionChannels((current) => ({ ...current, [account.id]: context.broadcaster.login }))
+    } else await streamWorkflows.stopMonitor(account.id)
     if (!mounted.current) return
     say(start
-      ? t('Viewer nomination collection started for your live or upcoming stream. Earlier chat is not recovered.')
+      ? t('Viewer nomination collection started for the selected channel. Earlier chat is not recovered.')
       : t('Viewer nomination collection stopped. Recorded nomination counts remain available.'))
     await load()
   })
@@ -408,7 +427,7 @@ export default function ConnectedAccountsCard({
               <ol className="text-xs text-muted list-decimal pl-5 space-y-1">
                 <li>{t('Turn on two-factor authentication for your Twitch account. Twitch asks for it before you can register an application.')}</li>
                 <li>{t('In the Twitch developer console, choose Register Your Application and give it any name.')}</li>
-                <li>{t('Under OAuth Redirect URLs enter http://localhost. Twitch requires one, though signing in here never uses it.')}</li>
+                <li>{t('Under OAuth Redirect URLs enter https://localhost. Twitch requires one, though signing in here never uses it.')}</li>
                 <li>{t('Pick any Category, and set Client Type to Public.')}</li>
                 <li>{t('Create it, then copy its Client ID and paste it below. A client secret is not needed.')}</li>
               </ol>
@@ -457,17 +476,31 @@ export default function ConnectedAccountsCard({
                 <div className="space-y-2 border-t border-raised pt-2">
                   <h5 className="text-xs font-semibold">{t('Viewer highlight nominations')}</h5>
                   <p className="text-xs text-muted">
-                    {t('Viewers can use !clip, !chaos and !funny to support AI highlight selection. Start collection explicitly for your live or upcoming stream; it begins once Twitch confirms the stream. Earlier chat is not recovered.')}
+                    {t('Collect !clip, !chaos and !funny nominations from a channel you watch. Viewer access is enough to read public chat. Collection begins once Twitch confirms a live stream; earlier chat is not recovered.')}
                   </p>
+                  <label className="block space-y-1 text-xs">
+                    <span>{t('Twitch channel to collect from')}</span>
+                    <input className="input w-full" type="text" placeholder={account.login}
+                      aria-label={`${t('Twitch channel to collect from')}: ${account.login}`}
+                      value={nominationStatus[account.id]?.monitoring
+                        ? (collectionChannels[account.id] || nominationStatus[account.id].broadcaster_login || '')
+                        : (channelNames[account.id] ?? nominationStatus[account.id]?.broadcaster_login ?? account.login)}
+                      disabled={busy || Boolean(flow) || nominationStatus[account.id]?.monitoring === true}
+                      onChange={(event) => setChannelNames((current) => ({ ...current, [account.id]: event.target.value }))} />
+                  </label>
                   <p className="text-xs text-muted">
-                    {t('Clips Kitty records the counts below. Using them to choose clips from a recording needs a match between stream and recording times, which Clips Kitty cannot make yet.')}
+                    {t('After the stream ends, bind its Twitch recording and check the timing to use these nominations when finding highlights.')}
                   </p>
                   {nominationStatus[account.id] && (
                     <p className="text-xs" role="status">
                       {nominationStatus[account.id].monitoring
-                        ? t('Collection enabled for your live or upcoming stream.')
+                        ? `${t('Collection enabled for channel')}: ${collectionChannels[account.id] || nominationStatus[account.id].broadcaster_login || t('Selected channel')}`
                         : t('Collection stopped.')}
                     </p>
+                  )}
+                  {nominationStatus[account.id]?.monitoring && nominationStatus[account.id]?.broadcaster_id && (
+                    <TwitchActivity key={`${account.id}:${nominationStatus[account.id].broadcaster_id}`}
+                      accountId={account.id} broadcasterId={nominationStatus[account.id].broadcaster_id!} />
                   )}
                   {nominationErrors[account.id] && <p className="text-xs text-warn">{nominationErrors[account.id]}</p>}
                   <div className="flex flex-wrap gap-2">
@@ -481,12 +514,8 @@ export default function ConnectedAccountsCard({
                       onClick={() => void act(load)}>{t('Refresh nomination counts')}</button>
                   </div>
                   {nominationStatus[account.id]?.streams.slice(0, 5).map((stream) => (
-                    <p key={stream.stream_id} className="text-xs text-muted">
-                      {t('Stream')} {stream.stream_id}
-                      {stream.stream_start ? ` · ${new Date(stream.stream_start).toLocaleString()}` : ''}
-                      {' · '}{stream.ended_at ? t('Ended') : t('No end recorded')}
-                      {' · '}{t('Nominations')}: {stream.nomination_count}
-                    </p>
+                    <RecordingBindingCard key={stream.stream_id} accountId={account.id} stream={stream}
+                      disabled={busy || Boolean(flow)} onSaved={load} />
                   ))}
                   {nominationStatus[account.id]?.streams.length === 0 && (
                     <p className="text-xs text-muted">{t('No stream has been recorded for nomination collection yet.')}</p>

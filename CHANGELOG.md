@@ -12,7 +12,7 @@ were often broken in a way that only showed up on somebody else's machine.
 
 ### Added
 
-- **Connect your Twitch account** (new, and not yet tried against a real Twitch account).
+- **Connect your Twitch account** (new).
   In Settings → Connected accounts you register a free Twitch application once (the card
   lists the steps), paste its Client ID, then sign in on Twitch's own page with a code.
   No Clips Kitty account is needed, and the sign-in is kept encrypted on this PC. Twitch is
@@ -23,10 +23,15 @@ were often broken in a way that only showed up on somebody else's machine.
   you). Its new videos are then found through your connection, and
   through the public video list, as before, whenever the connection needs reconnecting or
   Twitch doesn't answer, so the watch keeps going.
+  If you disable or uninstall a Gaming detector while the Watch form is open, it
+  returns to **All games (Clips Kitty)** so adding a channel still works.
 - **Viewer nominations.** With the chat permission ticked you can start and stop
-  collecting your viewers' !clip, !chaos and !funny while you're live, and see the counts
-  for each stream. Clips Kitty doesn't use them to choose clips yet: that needs the
-  stream's chat times matched to its recording, which it can't do yet.
+  collecting !clip, !chaos and !funny from your channel or a channel you watch, with command
+  counts and a timeline for each stream. After a broadcast ends, Clips Kitty looks
+  for its matching Twitch recording and keeps checking for up to six hours, including
+  across restarts. In Connected accounts, use **Bind recording** to check the recording
+  against your stream clock and confirm the offset. The complete downloaded recording
+  can then use those mapped nominations. These workflows still need live-account verification.
 - **For people who make pipelines:** a pipeline you allow can read your channel's Twitch
   details, link to a moment of the Twitch VOD it is clipping, and make a Twitch clip of
   that moment, all through Clips Kitty and never with your Twitch sign-in. Links and clips
@@ -34,6 +39,13 @@ were often broken in a way that only showed up on somebody else's machine.
   pipeline can't clip your live stream.
 
 ### Changed
+
+- Plugin local-model requests now share their requested timeout between checking
+  model capabilities and generating an answer. A capability check that uses the
+  budget no longer starts another full-length request.
+- Plugins can reuse validated results in an app-managed cache without changing
+  their installed files, and can see the runner's actual deadline to finish
+  optional review before it expires. Unavailable cache storage does not stop a run.
 
 Clips are framed and chosen in two new ways, on for everyone. Either can be turned off
 with one line in your settings file: `%LOCALAPPDATA%\Clips Studio\settings.yaml` in the

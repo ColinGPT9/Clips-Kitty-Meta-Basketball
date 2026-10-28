@@ -11,7 +11,7 @@ Discord authorization and bot installation are a separate integration effort.
 
 1. Register an application in the [Twitch developer console](https://dev.twitch.tv/console/apps).
    Twitch asks for two-factor authentication on the account first. The form
-   needs a name, at least one **OAuth Redirect URL** (`http://localhost` will
+   needs a name, at least one **OAuth Redirect URL** (`https://localhost` will
    do: device sign-in never uses it), a **Category**, and **Client Type: Public**.
 2. In **Settings → Connected accounts**, save that application's Client ID
    (letters and numbers only). Do not enter a client secret; the desktop app
@@ -142,6 +142,39 @@ not accept arbitrary endpoints or tokens. Event reception uses
 `POST /connected-accounts/{account_id}/events` with `event_types`, followed by
 `GET` on that path with an `after` cursor; `DELETE` stops it and clears events.
 
+### Collect from a channel you watch
+
+In Settings > Connected accounts, allow **Read Twitch chat**, then enter a
+channel name or Twitch channel URL under **Viewer highlight nominations**.
+Start collection explicitly. The signed-in account reads the selected channel;
+it does not need to be that channel's broadcaster or moderator. Earlier chat is
+not recovered. Stop collection before changing channels. Another active plugin
+consumer on a different channel is preserved and the conflicting request is
+refused. Reloading the panel does not start collection or switch its channel.
+
+The desktop `stream_context` operation accepts either a numeric `broadcaster_id`
+or a `broadcaster_login`; the latter resolves through Twitch's Users endpoint.
+No supplied URL is fetched. `videos` can read a selected public channel.
+The events POST and stream-workflow monitor POST accept an optional
+`broadcaster_id`; omitting it keeps the connected-channel default. Event GET
+returns the active listener's channel. These changes do not expose OAuth tokens.
+
+Viewer nominations retain their actual broadcaster and stream identity. Archive
+discovery queries that channel, and Bind recording still checks the actual VOD,
+recorded stream and explicit timing. A plugin may use a public VOD through a
+reader account only after a verified host mapping exists. Merely signing in or
+changing a display-channel field grants no arbitrary plugin target.
+
+The desktop live `create_clip` action can target a public channel when the reader
+holds `clips:edit`, subject to Twitch's channel restrictions. It publishes a native
+clip and is never called by nomination collection. The existing VOD-clip and chat
+write gates remain in place; a viewer grant does not provide broadcaster/editor
+VOD-clip permission. Local exports and verified VOD links remain available.
+
+Provider rules: [chat EventSub authorization](https://dev.twitch.tv/docs/eventsub/eventsub-subscription-types/#channelchatmessage),
+[live clips](https://dev.twitch.tv/docs/api/reference/#create-clip), and
+[VOD clips](https://dev.twitch.tv/docs/api/reference/#create-clip-from-vod).
+
 Plugins must instead use the supported
 [Connected Accounts SDK](developers/connected-accounts-sdk.md). The host grants
 only the installed permissions and binds each run to a Twitch-verified source
@@ -176,10 +209,14 @@ and `eventsub.wss.twitch.tv`. The activation page is on `www.twitch.tv`.
 Verify consent/denial/cancellation, account identity, scope selection, restart,
 token refresh, revoked permissions, own-channel watch discovery, live clip
 creation, VOD links, chat/EventSub reconnect, and disconnect against that account.
-None of this has yet been tried against a real Twitch account: live
-authorization, clips, chat and EventSub are checked only with fake provider
-responses. Windows DPAPI storage itself (core/secrets) is the app's existing
-credential store; the Connected Accounts tests inject the OS boundary.
+Real viewer-account checks have verified authorization, exact scopes, Windows
+DPAPI persistence across a backend restart, selected public-channel metadata,
+archive timestamp links, EventSub subscription and incoming chat delivery.
+Releasing the desktop consumer preserved the nomination collector, and stopping
+collection closed the listener. The channel was offline: live stream transitions,
+nomination-to-recording clock alignment, native clip creation, token refresh,
+revocation and social delivery remain unverified by that session. See the
+[test log](hackathon/TEST_LOG.md) for the source snapshot and evidence limits.
 
 Official provider references:
 

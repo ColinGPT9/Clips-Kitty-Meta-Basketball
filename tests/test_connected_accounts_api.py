@@ -86,6 +86,7 @@ class FakeEvents:
     def __init__(self):
         self.started = []
         self.stopped = []
+        self.released = []
 
     def start(self, account_id, broadcaster_id, event_types):
         self.started.append((account_id, broadcaster_id, event_types))
@@ -96,6 +97,9 @@ class FakeEvents:
 
     def stop(self, account_id):
         self.stopped.append(account_id)
+
+    def release(self, account_id, consumer):
+        self.released.append((account_id, consumer))
 
     def close(self):
         pass
@@ -260,13 +264,35 @@ def test_desktop_operations_bind_broadcaster_and_reject_unrestricted_actions(api
     for body in (
         {"operation": "http", "params": {"url": "https://evil.example"}},
         {"operation": "subscribe_events", "params": {"session_id": "untrusted"}},
-        {"operation": "create_clip", "params": {"broadcaster_id": "999"}},
+        {"operation": "send_chat", "params": {"broadcaster_id": "999", "message": "No write"}},
     ):
         assert client.post(path, headers=HEADERS, json=body).status_code in (400, 403)
     assert provider.operations == []
     response = client.post(path, headers=HEADERS, json={"operation": "create_clip"})
     assert response.status_code == 200
     assert provider.operations == [("create_clip", {"broadcaster_id": "123"})]
+
+
+def test_viewer_can_read_selected_public_channel_and_subscribe(api):
+    connect(api)
+    client, _, provider, _, events, *_ = api
+    path = f"/connected-accounts/{ACCOUNT}"
+    response = client.post(path + "/twitch", headers=HEADERS,
+                           json={"operation": "stream_context", "params": {"broadcaster_login": "zackrawrr"}})
+    assert response.status_code == 200, response.text
+    assert provider.operations[-1] == ("stream_context", {"broadcaster_login": "zackrawrr"})
+    response = client.post(path + "/events", headers=HEADERS,
+                           json={"broadcaster_id": "999", "event_types": ["stream.online"]})
+    assert response.status_code == 200, response.text
+    assert events.started[-1] == (ACCOUNT, "999", ["stream.online"])
+    response = client.post(path + "/twitch", headers=HEADERS,
+                           json={"operation": "create_clip", "params": {"broadcaster_id": "999"}})
+    assert response.status_code == 200, response.text
+    assert provider.operations[-1] == ("create_clip", {"broadcaster_id": "999"})
+    response = client.post(path + "/twitch", headers=HEADERS, json={
+        "operation": "vod_link", "params": {"broadcaster_id": "999", "video_id": "789", "seconds": 60}})
+    assert response.status_code == 200, response.text
+    assert provider.operations[-1] == ("vod_link", {"broadcaster_id": "999", "video_id": "789", "seconds": 60})
 
 
 @pytest.mark.parametrize("key", ["account_id", "operation", "access_token", "url", "session_id"])
@@ -313,6 +339,16 @@ def test_eventsub_session_is_owned_by_host(api):
         json={"session_id": "plugin-socket", "event_types": ["stream.online"]},
     )
     assert response.status_code == 422
+
+
+def test_stopping_desktop_events_leaves_nomination_consumer_running(api):
+    connect(api)
+    client, _, _, _, events, *_ = api
+    events.stopped.clear()
+    response = client.delete(f"/connected-accounts/{ACCOUNT}/events", headers=HEADERS)
+    assert response.status_code == 200
+    assert events.released == [(ACCOUNT, "desktop")]
+    assert events.stopped == []
 
 
 def test_unavailable_keychain_prevents_authorization(api):

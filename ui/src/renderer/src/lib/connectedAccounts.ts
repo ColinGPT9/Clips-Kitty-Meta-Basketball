@@ -53,11 +53,41 @@ export interface RecordedNominationStream {
   stream_start: string | null
   ended_at: string | null
   nomination_count: number
+  commands?: Record<string, number>
+  timeline?: { offset_seconds: number; count: number; commands: Record<string, number> }[]
+  timeline_truncated?: boolean
+  bucket_seconds?: number
+  mapping?: { vod_id: string; offset_seconds: number; source_id: string | null } | null
+  recording?: { status: 'pending' | 'ready' | 'expired'; vod_id: string | null; attempts: number; next_check: number } | null
+}
+
+export interface RecordingMapping {
+  broadcaster_id: string
+  vod_id: string
+  stream_id: string
+  stream_start: string
+  offset_seconds: number
+  verified: true
 }
 
 export interface ViewerNominationStatus {
   monitoring: boolean
+  broadcaster_id?: string | null
+  broadcaster_login?: string | null
   streams: RecordedNominationStream[]
+}
+
+export interface TwitchStreamContext {
+  broadcaster: { id: string; login: string; display_name: string }
+  stream: { id: string; title: string; game_name: string; started_at: string } | null
+}
+
+export interface TwitchEventBatch {
+  status: string
+  broadcaster_id?: string
+  cursor: number
+  truncated?: boolean
+  events: { sequence: number; type: string; broadcaster_id: string }[]
 }
 
 export const ACCOUNTS_CHANGED = 'connected-accounts-changed'
@@ -156,17 +186,60 @@ export const connectedAccounts = {
     request<unknown>(`/flows/${encodeURIComponent(flowId)}`, { method: 'DELETE' }),
   test: (id: string) => settled(request<unknown>(`${accountPath(id)}/test`, { method: 'POST' })),
   disconnect: (id: string) => request<DisconnectResult>(accountPath(id), { method: 'DELETE' }).then(changed),
-  watch: (id: string) => settled(request<unknown>(`${accountPath(id)}/watch`, { method: 'POST' }))
+  watch: (id: string) => settled(request<unknown>(`${accountPath(id)}/watch`, { method: 'POST' })),
+  events: (id: string, after = 0) =>
+    request<TwitchEventBatch>(`${accountPath(id)}/events?after=${after}&limit=100`),
+  streamContext: (id: string, login: string) =>
+    request<TwitchStreamContext>(`${accountPath(id)}/twitch`, {
+      method: 'POST', body: JSON.stringify({ operation: 'stream_context', params: { broadcaster_login: login } })
+    })
 }
 
 /** Explicit desktop controls; loading status never starts a chat listener. */
 export const streamWorkflows = {
   streams: (id: string) =>
     authenticatedRequest<ViewerNominationStatus>('/stream-workflows', `${accountPath(id)}/streams`),
-  startMonitor: (id: string) =>
-    authenticatedRequest<{ monitoring: boolean }>('/stream-workflows', `${accountPath(id)}/monitor`, { method: 'POST' }),
+  startMonitor: (id: string, broadcasterId?: string) =>
+    authenticatedRequest<{ monitoring: boolean }>('/stream-workflows', `${accountPath(id)}/monitor`, {
+      method: 'POST', ...(broadcasterId ? { body: JSON.stringify({ broadcaster_id: broadcasterId }) } : {})
+    }),
   stopMonitor: (id: string) =>
-    authenticatedRequest<{ monitoring: boolean }>('/stream-workflows', `${accountPath(id)}/monitor`, { method: 'DELETE' })
+    authenticatedRequest<{ monitoring: boolean }>('/stream-workflows', `${accountPath(id)}/monitor`, { method: 'DELETE' }),
+  bindRecording: (id: string, mapping: RecordingMapping) =>
+    authenticatedRequest<unknown>('/stream-workflows', `${accountPath(id)}/vod-mapping`, {
+      method: 'PUT', body: JSON.stringify(mapping)
+    }),
+  retryRecording: (id: string, streamId: string) =>
+    authenticatedRequest<{ status: 'pending' }>('/stream-workflows',
+      `${accountPath(id)}/recordings/${encodeURIComponent(streamId)}/retry`, { method: 'POST' })
+}
+
+/** Parse a channel name locally; pasted URLs are never opened or fetched. */
+export function twitchChannelLogin(value: string): string | null {
+  let input = value.trim()
+  if (input.includes('://')) {
+    try {
+      const url = new URL(input)
+      if (url.protocol !== 'https:' || !['twitch.tv', 'www.twitch.tv'].includes(url.hostname) ||
+        url.username || url.password || url.port || url.search || url.hash) return null
+      input = url.pathname.replace(/^\//, '').replace(/\/$/, '')
+    } catch { return null }
+  } else input = input.replace(/^@/, '')
+  return /^[A-Za-z0-9_]{1,25}$/.test(input) ? input.toLowerCase() : null
+}
+
+/** Read a recording ID without opening an arbitrary pasted address. */
+export function twitchVodId(value: string): string | null {
+  const input = value.trim()
+  if (/^[0-9]{1,30}$/.test(input)) return input
+  try {
+    const url = new URL(input)
+    if (url.protocol !== 'https:' || !['twitch.tv', 'www.twitch.tv'].includes(url.hostname) ||
+      url.username || url.password || url.port || url.hash) return null
+    return /^\/videos\/([0-9]{1,30})\/?$/.exec(url.pathname)?.[1] ?? null
+  } catch {
+    return null
+  }
 }
 
 /** Twitch's device grant opens its official activation page in the system browser. */
