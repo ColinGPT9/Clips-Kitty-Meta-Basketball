@@ -69,7 +69,9 @@ def tick(db, data_dir, state: TickState, *, relay: Relay | None = None, emit=Non
     if not config["whatsapp_enabled"]:
         return 0
     mono = clock()
-    if mono < state.next_pass:
+    # A message waiting to go (a job just finished) doesn't wait for the
+    # slow pace: the creator hears about it within seconds.
+    if mono < state.next_pass and not store.due_outbox(db, now, limit=1):
         return 0
     state.next_pass = mono + (FAST_SECONDS if busy(db) else SLOW_SECONDS)
     relay = relay or client(db, data_dir)
@@ -362,12 +364,13 @@ def register(db, data_dir, enroll_key: str) -> dict:
     config = ra_settings.load(db)
     if not config["relay_url"]:
         raise RelayError("bad_request", "Enter your relay's address first.")
+    fresh = not ra_settings.device(data_dir)
     device = ra_settings.device(data_dir) or ra_settings.new_device(data_dir)
     relay = Relay(config["relay_url"], **device)
     try:
         relay.register(enroll_key)
     except RelayError:
-        if not ra_settings.device(data_dir):
+        if fresh:  # a secret the relay never accepted is not kept
             ra_settings.forget_device(data_dir)
         raise
     push_preferences(db, relay)
@@ -474,3 +477,60 @@ def retry_failed(db, review_id: int) -> int:
     if queued:
         store.move(db, review_id, states.PUBLISH_QUEUED, actor="desktop", detail=f"retry: {queued} clip(s)")
     return queued
+
+
+def disconnect(db, data_dir) -> None:
+    """Disconnect from Settings: the relay forgets this PC (its number, its
+    PIN, its Meta accounts, its open offers), then this PC forgets its device
+    secret. Open offers here are cancelled. Works even when the relay can't
+    be reached: this PC stops either way."""
+    relay = client(db, data_dir)
+    if relay is not None:
+        try:
+            relay.disconnect()
+        except RelayError as e:
+            print(f"  Relay: {e.message}")
+    for review in store.reviews_in(db, [states.READY_FOR_REVIEW, states.NOTIFICATION_PENDING, *states.OPEN]):
+        try:
+            store.move(db, review["id"], states.CANCELLED, actor="desktop", detail="disconnected in Settings")
+        except states.IllegalMove:
+            pass
+    db.conn.execute("UPDATE remote_outbox SET status = 'dropped', error = 'disconnected' WHERE status = 'pending'")
+    db.conn.commit()
+    ra_settings.forget_device(data_dir)
+    ra_settings.save(db, {"whatsapp_enabled": False, "remote_approvals": False, "pairing": {}, "pin_set": False,
+                          "accounts": {}, "templates": {}}, internal=True)
+
+
+def review_view(db, review: dict, *, detail: bool = False) -> dict:
+    """One offer as Settings shows it: what was offered, where it stands,
+    what was confirmed. No file path, no secret."""
+    totals = (review.get("results") or {}).get("totals") or {}
+    out = {
+        "id": review["id"],
+        "job_id": review["job_id"],
+        "title": review["title"],
+        "state": review["state"],
+        "summary": summary.ready_text(review["summary"]) if review.get("summary") else "",
+        "clips": [{"clip_id": c["clip_id"], "title": c.get("title") or c.get("label") or "",
+                   "category": c.get("category") or ""} for c in review["clips"]],
+        "decision": {"clips": review["decision"].get("clips") or [],
+                     "platforms": review["decision"].get("platforms") or []} if review.get("decision") else {},
+        "result_text": result_text(review["results"]) if totals else "",
+        "results": review.get("results") or {},
+        "error": review.get("error") or "",
+        "expires_at": review["expires_at"],
+        "remind_at": review.get("remind_at") or "",
+        "created_at": review["created_at"],
+        "updated_at": review["updated_at"],
+        "captions_by": (review.get("captions") or {}).get("model", ""),
+        "can_cancel": review["state"] in (*states.OPEN, states.NOTIFICATION_PENDING, states.READY_FOR_REVIEW,
+                                          states.PUBLISH_QUEUED),
+        "can_retry": review["state"] in (states.PARTIAL_FAILURE, states.FAILED),
+        "can_ask_again": review["state"] in (states.EXPIRED, states.CANCELLED),
+        "can_resend": review["state"] == states.NOTIFICATION_PENDING and bool(review.get("error")),
+    }
+    if detail:
+        out["audit"] = store.audit_log(db, review["id"], 200)
+        out["messages"] = store.outbox_for_review(db, review["id"])
+    return out

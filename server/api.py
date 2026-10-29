@@ -808,6 +808,14 @@ def create_app(config: dict, settings_path: Path) -> FastAPI:
     discord_api.install(app, db=db, data_dir=data_dir, session_secret=desktop_session,
                         publish_worker=publish_worker)
 
+    # Settings → Notifications & Remote Approval (remote_approval/): WhatsApp
+    # notifications and publishing approved from the phone, through the
+    # creator's own relay. Its changing routes take the same session secret.
+    from server import remote_approval_api
+
+    remote_approval_api.install(app, db=db, data_dir=data_dir, session_secret=desktop_session,
+                                publish_worker=publish_worker)
+
     # Clipping campaigns and their submissions (campaigns/): the publish
     # worker follows each post and sends what a webhook may send.
     from server import campaigns_api

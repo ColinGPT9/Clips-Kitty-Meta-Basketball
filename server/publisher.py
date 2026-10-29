@@ -78,6 +78,15 @@ class PublishWorker(threading.Thread):
         self._campaigns_now = True
         self._wake.set()
 
+    def notify_remote_approval(self) -> None:
+        """Talk to the relay on the next turn of the loop instead of at its
+        own pace: a setting changed, an offer was cancelled from the app."""
+        state = getattr(self, "_remote_state", None)
+        if state is not None:
+            state.next_pass = 0.0
+            state.next_status = 0.0
+        self._wake.set()
+
     def stop(self) -> None:
         self._stop.set()
         self._wake.set()
