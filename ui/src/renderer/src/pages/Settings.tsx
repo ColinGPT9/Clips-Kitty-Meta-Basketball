@@ -26,6 +26,7 @@ import {
 import AICard from '../components/AICard'
 import UploadPostCard from '../components/UploadPostCard'
 import DiscordCard from '../components/DiscordCard'
+import NotificationsApprovalCard from '../components/NotificationsApprovalCard'
 import WoopSocialCard from '../components/WoopSocialCard'
 import YouTubeCard from '../components/YouTubeCard'
 import ConnectedAccountsCard from '../components/ConnectedAccountsCard'
@@ -778,6 +779,10 @@ export default function Settings(): JSX.Element {
       <AppearanceCard />
 
       <NotificationsCard />
+
+      {/* WhatsApp messages and publishing approved from the phone, through
+          the creator's own relay (Meta hackathon edition). */}
+      <NotificationsApprovalCard />
 
       <ExportFolderCard />
 

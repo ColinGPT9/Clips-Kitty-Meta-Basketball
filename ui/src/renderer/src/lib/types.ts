@@ -800,6 +800,7 @@ export interface StudioEvent {
    *  nothing to do with the video pipeline's progress.
    *  'clip_replaced' is a re-render done: the clip is back under a new id. */
   type: 'progress' | 'job' | 'model_pull' | 'queue' | 'publish' | 'automation' | 'clip_replaced'
+    | 'remote_approval'
   /** clip_replaced only: the clip's id before the re-render, and after it. */
   old?: number
   new?: number

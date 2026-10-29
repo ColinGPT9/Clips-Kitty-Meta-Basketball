@@ -717,7 +717,11 @@ const EXTERNAL_ALLOWED = [
   /^https:\/\/(www\.)?linkedin\.com\//,
   /^https:\/\/([a-z]{2}\.|www\.)?pinterest\.[a-z.]{2,6}\//,
   /^https:\/\/(www\.)?bsky\.app\//,
-  /^https:\/\/(www\.)?reddit\.com\//
+  /^https:\/\/(www\.)?reddit\.com\//,
+  // Settings → Notifications & Remote Approval: pairing a WhatsApp number
+  // opens WhatsApp with the one-time code typed (wa.me, only in that shape).
+  // The Meta sign-ins it opens are on facebook.com and threads.com, above.
+  /^https:\/\/wa\.me\/\d{6,15}\?text=LINK%20[A-Z0-9]{6}$/
 ]
 
 ipcMain.handle('open-external', (_event, url: unknown) => {
