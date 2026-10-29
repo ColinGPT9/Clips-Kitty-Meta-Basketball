@@ -306,6 +306,7 @@ export default function NotificationsApprovalCard(): JSX.Element {
                   >
                     {t('Send a test message')}
                   </button>
+                  <Templates templates={s.templates} disabled={disabled} run={run} reload={load} />
                 </div>
               )}
             </div>
@@ -556,6 +557,62 @@ function ReviewRow(props: {
           ))}
         </div>
       ))}
+    </div>
+  )
+}
+
+/** The WhatsApp message templates Meta has to approve before a message can
+ *  reach a phone that hasn't written to the business number in 24 hours. */
+function Templates(props: {
+  templates: Record<string, string>
+  disabled: boolean
+  run: (work: () => Promise<void>) => Promise<void>
+  reload: () => void
+}): JSX.Element {
+  const { templates, disabled, run, reload } = props
+  const names = Object.keys(templates)
+  const approved = names.filter((n) => templates[n] === 'APPROVED').length
+  return (
+    <div className="text-xs space-y-1">
+      <p className="text-muted">
+        {names.length === 0
+          ? t('Message templates: not submitted yet. Until Meta approves them, messages only reach you within 24 hours of your last message to the business number.')
+          : `${t('Message templates approved by Meta')}: ${approved} / ${names.length}` +
+            (approved < names.length
+              ? ` (${names
+                  .filter((n) => templates[n] !== 'APPROVED')
+                  .map((n) => `${n}: ${templates[n].toLowerCase()}`)
+                  .join(', ')})`
+              : '')}
+      </p>
+      <div className="flex gap-2">
+        {approved < 4 && (
+          <button
+            className="btn-ghost !py-0.5 !px-2 text-xs"
+            disabled={disabled}
+            onClick={() =>
+              void run(async () => {
+                await remoteApproval.templates(true)
+                reload()
+              })
+            }
+          >
+            {t('Submit templates to Meta')}
+          </button>
+        )}
+        <button
+          className="btn-ghost !py-0.5 !px-2 text-xs"
+          disabled={disabled}
+          onClick={() =>
+            void run(async () => {
+              await remoteApproval.templates(false)
+              reload()
+            })
+          }
+        >
+          {t('Check status')}
+        </button>
+      </div>
     </div>
   )
 }
