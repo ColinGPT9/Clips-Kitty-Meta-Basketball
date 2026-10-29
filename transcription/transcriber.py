@@ -220,11 +220,21 @@ def transcribe(
         return segments
 
     if online and str(online.get("backend") or "local") != "local":
+        from llm.providers.base import LLMError
         from transcription import cloud
 
-        segments = cloud.transcribe(video_path, video_id, transcript_dir, online, language=language)
-        _collapse_repetition_loops(segments)
-        return segments
+        try:
+            segments = cloud.transcribe(video_path, video_id, transcript_dir, online, language=language,
+                                        hotwords=hotwords)
+        except LLMError as e:
+            # Only a provider that asks for it (Muse Voice) hands over to
+            # Whisper; every other one fails the job as before.
+            if not cloud.falls_back(online):
+                raise
+            print(f"  {e.message} Transcribing with Whisper on this PC instead.")
+        else:
+            _collapse_repetition_loops(segments)
+            return segments
 
     print(f"  Loading whisper model '{model_size}' (device={device})...")
     model = _load_model(model_size, device)

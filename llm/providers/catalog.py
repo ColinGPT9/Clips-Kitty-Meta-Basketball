@@ -86,9 +86,14 @@ META = ProviderSpec(
     key_label="Meta Model API key",
     key_url="https://dev.meta.ai/",
     pricing_url="https://dev.meta.ai/docs/pricing-rate-limits",
-    privacy="Transcripts and prompts are sent to Meta with your key.",
+    privacy="Transcripts and prompts (and audio, if it transcribes) are sent to Meta with your key.",
     model_filter=_meta_model,
-    tagline="Direct Meta Model API (Muse Spark).",
+    # Muse Voice Transcribe (new for the Meta hackathon edition). Turn-level
+    # timings only: Meta's docs say it returns no word timestamps, so none are
+    # made up here, and local Whisper takes over if Meta can't transcribe.
+    stt={"format": "muse_voice", "models": ["muse-voice-transcribe-1.0"], "chunk_seconds": 540,
+         "word_timings": False, "fallback_local": True},
+    tagline="Direct Meta Model API (Muse Spark, Muse Voice Transcribe).",
 )
 
 DEEPSEEK = ProviderSpec(
