@@ -9,4 +9,4 @@
 #
 # The SDK is 0.x and moves fast, so the ceiling is the next minor: raise it on
 # purpose, after signing in and clipping a video with it.
-openai-codex>=0.157.0,<0.158
+openai-codex>=0.163.0,<0.164
