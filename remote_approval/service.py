@@ -109,6 +109,7 @@ def expire_due(db, now) -> int:
                 store.move(db, review["id"], states.EXPIRED, actor="desktop", detail="the link expired")
                 moved += 1
             except states.IllegalMove:
+                # It was decided or cancelled since the list was read.
                 pass
     return moved
 
@@ -303,6 +304,7 @@ def _sent_offer(db, review_id: int, answer: dict) -> None:
         store.move(db, review_id, states.NOTIFICATION_SENT, actor="relay",
                    detail=f"sent as {answer.get('channel') or 'message'}", approval_id=approval_id, error="")
     except states.IllegalMove:
+        # The offer moved on (cancelled, or answered) while the message went out.
         pass
 
 
@@ -494,6 +496,7 @@ def disconnect(db, data_dir) -> None:
         try:
             store.move(db, review["id"], states.CANCELLED, actor="desktop", detail="disconnected in Settings")
         except states.IllegalMove:
+            # Already past the point where it can be cancelled.
             pass
     db.conn.execute("UPDATE remote_outbox SET status = 'dropped', error = 'disconnected' WHERE status = 'pending'")
     db.conn.commit()

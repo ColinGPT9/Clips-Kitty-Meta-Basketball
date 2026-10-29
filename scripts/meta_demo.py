@@ -264,6 +264,7 @@ def main() -> None:
             while True:
                 time.sleep(1)
     except KeyboardInterrupt:
+        # Ctrl+C is how --keep-open ends.
         pass
     finally:
         db.close()

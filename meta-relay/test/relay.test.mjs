@@ -306,7 +306,7 @@ describe("offers and approval", () => {
     assert.equal(sig, createHmac("sha256", SECRET).update(canonical(rest)).digest("hex"));
 
     // Single use: a second approval of the same link does nothing.
-    r = await submit(token, [...base, ["pin", "4826"]]);
+    await submit(token, [...base, ["pin", "4826"]]);
     assert.equal((await commands()).filter((c) => c.kind === "approve").length, 1);
     assert.match((await page(token)).text, /Waiting for your PC/);
   });
@@ -423,7 +423,7 @@ describe("offers and approval", () => {
     const th = await pc("POST", "/v1/meta/th_create", { ...ctx, text: "Poster", link });
     assert.equal(th.status, 200);
     const thMedia = (await pc("POST", "/v1/meta/th_publish", { ...ctx, container_id: th.data.container_id })).data.media_id;
-    assert.match((await pc("POST", "/v1/meta/th_permalink", { ...ctx, media_id: thMedia })).data.permalink, /threads\.com/);
+    assert.match((await pc("POST", "/v1/meta/th_permalink", { ...ctx, media_id: thMedia })).data.permalink, /^https:\/\/www\.threads\.com\/@hoopsdaily\/post\//);
     assert.equal(fake.posts.find((p) => p.platform === "threads").link, link);
   });
 
@@ -444,7 +444,7 @@ describe("offers and approval", () => {
     assert.equal(res.data.channel, "template");
     assert.equal(fake.messages.at(-1).template.name, "ck_publish_update");
     const view = (await page(token)).text;
-    assert.match(view, /instagram\.com\/reel\/ABC/);
+    assert.ok(view.includes('href="https://www.instagram.com/reel/ABC/"'));
     assert.doesNotMatch(view, /evil\.example/);
   });
 

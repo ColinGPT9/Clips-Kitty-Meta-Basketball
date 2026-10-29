@@ -55,6 +55,7 @@ def category_events() -> dict[str, set[str]]:
         if len(found) == len(CATEGORIES):
             return found
     except Exception:
+        # No usable sport spec: fall back to the built-in lists below.
         pass
     return {k: set(v) for k, v in _FALLBACK_EVENTS.items()}
 

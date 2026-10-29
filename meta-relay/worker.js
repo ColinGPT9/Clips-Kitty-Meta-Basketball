@@ -127,9 +127,9 @@ async function route(request, env, ctx) {
   m = path.match(/^\/a\/([A-Za-z0-9_-]{30,100})$/);
   if (m && method === "GET") return showOffer(env, m[1]);
   if (m && method === "POST") return decide(request, env, m[1]);
-  if (path === "/oauth/facebook/callback" && method === "GET") return oauthFacebook(env, url);
-  if (path === "/oauth/facebook/choose" && method === "POST") return oauthChoose(request, env);
-  if (path === "/oauth/threads/callback" && method === "GET") return oauthThreads(env, url);
+  if (path === "/oauth/facebook/callback" && method === "GET") return facebookCallback(env, url);
+  if (path === "/oauth/facebook/choose" && method === "POST") return facebookPagePicked(request, env);
+  if (path === "/oauth/threads/callback" && method === "GET") return threadsCallback(env, url);
   if (path === "/v1/devices" && method === "POST") return enroll(request, env);
   if (path.startsWith("/v1/")) {
     const auth = await authenticate(request, env, url);
@@ -271,11 +271,23 @@ function prefsOf(device) {
 
 // ---- pairing a WhatsApp number --------------------------------------------------
 
+// 31 letters don't divide 256, so `byte % 31` would favour the first few.
+// Take five bits at a time instead and skip the one value with no letter.
+function randomCode(length) {
+  let out = "";
+  while (out.length < length) {
+    for (const b of crypto.getRandomValues(new Uint8Array(length))) {
+      const i = b & 31;
+      if (i < CODE_ALPHABET.length && out.length < length) out += CODE_ALPHABET[i];
+    }
+  }
+  return out;
+}
+
 async function pairStart(env, device) {
   let code = "";
   for (let i = 0; i < 5 && !code; i++) {
-    const bytes = crypto.getRandomValues(new Uint8Array(6));
-    const candidate = [...bytes].map((b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join("");
+    const candidate = randomCode(6);
     const clash = await one(env, "SELECT device_id FROM recipients WHERE code_hash = ? AND code_expires > ?", await sha256Hex(candidate), now());
     if (!clash) code = candidate;
   }
@@ -962,7 +974,7 @@ async function metaUpload(request, env, device, url) {
 
 // ---- OAuth callbacks --------------------------------------------------------------------
 
-async function oauthFacebook(env, url) {
+async function facebookCallback(env, url) {
   if (url.searchParams.get("error")) return html(page.connectedPage("Facebook sign-in was cancelled. Nothing was connected.", false), 400);
   try {
     const out = await meta.finishFacebook(env, url.searchParams.get("state"), url.searchParams.get("code"));
@@ -974,7 +986,7 @@ async function oauthFacebook(env, url) {
   }
 }
 
-async function oauthChoose(request, env) {
+async function facebookPagePicked(request, env) {
   const form = await request.formData();
   try {
     const out = await meta.choosePage(env, String(form.get("state") || ""), String(form.get("page") || ""));
@@ -985,7 +997,7 @@ async function oauthChoose(request, env) {
   }
 }
 
-async function oauthThreads(env, url) {
+async function threadsCallback(env, url) {
   if (url.searchParams.get("error")) return html(page.connectedPage("Threads sign-in was cancelled. Nothing was connected.", false), 400);
   try {
     const out = await meta.finishThreads(env, url.searchParams.get("state"), url.searchParams.get("code"));

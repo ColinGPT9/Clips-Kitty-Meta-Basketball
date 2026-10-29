@@ -52,6 +52,7 @@ def run(worker, db, job, request_data: dict) -> None:
         try:
             store.move(db, review["id"], states.PUBLISHING, actor="publisher")
         except states.IllegalMove:
+            # Another clip of the same offer started uploading first.
             pass
 
     config = ra_settings.load(db)
