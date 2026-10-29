@@ -202,7 +202,7 @@ jobs:
           node-version: '22'
 
       - name: Relay tests
-        run: node --no-warnings --test test/*.test.mjs
+        run: node --no-warnings --experimental-sqlite --test test/*.test.mjs
 
   vendored:
     name: Vendored code unchanged

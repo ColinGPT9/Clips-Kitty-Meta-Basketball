@@ -3,8 +3,11 @@
  * the demo (scripts/meta_demo.py), and for trying the approval page in a
  * browser without a Cloudflare or Meta account.
  *
- *   node --no-warnings test/serve.mjs            # http://127.0.0.1:8787
- *   PORT=9000 ENROLL_KEY=... node test/serve.mjs
+ *   npm run dev                                  # http://127.0.0.1:8787
+ *   PORT=9000 ENROLL_KEY=... npm run dev
+ *
+ * (npm run dev adds --experimental-sqlite, which node:sqlite needs before
+ * Node 22.13.)
  *
  * It runs the real worker.js. Only its surroundings are stand-ins: D1 is
  * node:sqlite, and graph.facebook.com / rupload / graph.threads.com are the

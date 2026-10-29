@@ -72,8 +72,9 @@ def start_relay(port: int) -> subprocess.Popen:
     if not node:
         sys.exit("Node 22.5+ is needed to run the relay.")
     env = {**os.environ, "PORT": str(port), "ENROLL_KEY": ENROLL_KEY}
-    proc = subprocess.Popen([node, "--no-warnings", "test/serve.mjs"], cwd=ROOT / "meta-relay", env=env,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+    # --experimental-sqlite: node:sqlite needs it before Node 22.13; later versions accept it.
+    proc = subprocess.Popen([node, "--no-warnings", "--experimental-sqlite", "test/serve.mjs"],
+                            cwd=ROOT / "meta-relay", env=env, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
     url = f"http://127.0.0.1:{port}"
     for _ in range(100):
         try:

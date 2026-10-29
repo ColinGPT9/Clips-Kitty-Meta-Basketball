@@ -48,7 +48,8 @@ status), finish an OAuth sign-in, run the cron, and move the clock. Nothing
 is sent to WhatsApp or posted anywhere. `scripts/meta_demo.py` uses it for
 the end-to-end demo.
 
-Needs Node 22.5+ (for `node:sqlite`). No npm dependencies.
+Needs Node 22.5+ (for `node:sqlite`; the npm scripts pass `--experimental-sqlite`,
+which it needs before Node 22.13). No npm dependencies.
 
 ## Files
 

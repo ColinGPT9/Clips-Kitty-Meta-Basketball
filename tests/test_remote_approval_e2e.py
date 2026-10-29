@@ -61,8 +61,9 @@ def _free_port() -> int:
 def relay_url():
     port = _free_port()
     env = {**os.environ, "PORT": str(port), "ENROLL_KEY": ENROLL_KEY}
-    proc = subprocess.Popen(["node", "--no-warnings", "test/serve.mjs"], cwd=RELAY, env=env,
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    # --experimental-sqlite: node:sqlite needs it before Node 22.13; later versions accept it.
+    proc = subprocess.Popen(["node", "--no-warnings", "--experimental-sqlite", "test/serve.mjs"],
+                            cwd=RELAY, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     url = f"http://127.0.0.1:{port}"
     try:
         for _ in range(100):
