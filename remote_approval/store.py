@@ -203,17 +203,6 @@ def outbox_retry(db, item: dict, error: str, now: datetime | None = None) -> boo
     return True
 
 
-def requeue(db, event_key: str) -> bool:
-    """"Send again" from Settings: a failed message goes back in the queue."""
-    cur = db.conn.execute(
-        "UPDATE remote_outbox SET status = 'pending', attempts = 0, error = '', next_try_at = ?, "
-        "updated_at = ? WHERE event_key = ? AND status = 'failed'",
-        (stamp(), stamp(), event_key),
-    )
-    db.conn.commit()
-    return cur.rowcount == 1
-
-
 def outbox_for_review(db, review_id: int) -> list[dict]:
     rows = db.conn.execute(
         "SELECT id, event_key, kind, status, attempts, error, updated_at FROM remote_outbox "

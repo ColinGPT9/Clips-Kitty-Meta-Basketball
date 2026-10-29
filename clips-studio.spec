@@ -62,6 +62,10 @@ hiddenimports += collect_submodules("stream_workflows")
 hiddenimports += collect_submodules("websockets")
 # Clipping campaigns (campaigns/): every import of it sits inside a function.
 hiddenimports += collect_submodules("campaigns")
+# Remote approval (remote_approval/): imported inside the pipeline worker's
+# announce and the publish worker's loop, never at the top of a module.
+hiddenimports += collect_submodules("remote_approval")
+hiddenimports += ["publish.meta_graph"]
 # Cloud AI adapters (llm/providers/adapters/): adapter_for imports each by the
 # name its provider spec gives, which the analyser can't follow. 2.0.0 shipped
 # without them and saving any cloud key failed with a 500 (#135).

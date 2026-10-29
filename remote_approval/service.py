@@ -418,6 +418,26 @@ def ask_again(db, review_id: int) -> int | None:
                           clips=db.clips_for_video(old["video_id"]) if old["video_id"] else [])
 
 
+def resend(db, review_id: int) -> bool:
+    """"Send again" for an offer WhatsApp could not deliver (or the relay
+    refused, say before pairing was confirmed). It goes out under a new
+    event key: the relay keeps one message per key, and it cancelled the
+    old link when delivery failed, so the creator gets a fresh one. The
+    clips and the expiry are the offer's own; nothing is re-rendered."""
+    review = store.get_review(db, review_id)
+    if review is None or review["state"] != states.NOTIFICATION_PENDING:
+        return False
+    rows = [r for r in store.outbox_for_review(db, review_id) if r["kind"] == "ready"]
+    if any(r["status"] == "pending" for r in rows):
+        return False
+    key = f"ready:review:{review_id}:resend:{len(rows)}"
+    if store.enqueue(db, key, "ready", review_id=review_id):
+        store.update_review(db, review_id, error="")
+        store.audit(db, review_id, "desktop", "resend", "sent again from the app")
+        return True
+    return False
+
+
 def cancel_from_app(db, data_dir, review_id: int) -> dict:
     """Cancel from the PC: always allowed before anything is uploading."""
     review = store.get_review(db, review_id)

@@ -21,10 +21,17 @@ from remote_approval import captions, states, store, summary, usage
 from remote_approval import settings as ra_settings
 
 
-def run(worker, db, job, request_data: dict) -> None:
-    from publish.errors import PublishCancelled, PublishError
+def make_graph(config: dict, device: dict):
+    """The Graph client for a publish: through this PC's relay. Tests and the
+    demo replace it."""
     from publish.meta_graph import MetaGraph
     from remote_approval.relay import Relay
+
+    return MetaGraph(Relay(config["relay_url"], **device))
+
+
+def run(worker, db, job, request_data: dict) -> None:
+    from publish.errors import PublishCancelled, PublishError
 
     job_id = job["id"]
     review = store.get_review(db, int(request_data.get("review_id") or 0))
@@ -51,7 +58,7 @@ def run(worker, db, job, request_data: dict) -> None:
     device = ra_settings.device(worker.data_dir)
     if not device or not config["relay_url"]:
         raise PublishError("This PC is no longer connected to your relay. Nothing was posted.")
-    graph = MetaGraph(Relay(config["relay_url"], **device))
+    graph = make_graph(config, device)
     ctx = {"command_id": review["decision"]["command_id"], "approval_id": review["approval_id"],
            "clip_id": int(job["clip_id"])}
     text = captions.texts_for(review, clip, entry)

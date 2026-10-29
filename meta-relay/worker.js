@@ -785,39 +785,50 @@ async function inbound(env, msg) {
   const link = text.match(/^link\s+([A-Za-z0-9]{6})$/i);
   if (link) return pairFromPhone(env, from, userId, link[1].toUpperCase());
 
-  const recipient = await findRecipient(env, from, userId);
-  if (!recipient) return; // a stranger: no reply, no cost
-  await run(env, "UPDATE recipients SET last_inbound = ? WHERE device_id = ?", now(), recipient.device_id);
-  recipient.last_inbound = now();
+  // One number can be paired with more than one PC (a desktop and a laptop,
+  // or a reinstall). The 24-hour window and STOP belong to the number; a
+  // button tap belongs to the offer it was sent with, and so to that PC.
+  const recipients = await findRecipients(env, from, userId);
+  if (!recipients.length) return; // a stranger: no reply, no cost
+  for (const r of recipients) {
+    await run(env, "UPDATE recipients SET last_inbound = ? WHERE device_id = ?", now(), r.device_id);
+    r.last_inbound = now();
+  }
+  const recipient = recipients[0];
 
-  if (msg.type === "button" && msg.button) return quickReply(env, recipient, String(msg.button.payload || ""), msg.context && msg.context.id);
+  if (msg.type === "button" && msg.button) return quickReply(env, recipients, String(msg.button.payload || ""), msg.context && msg.context.id);
   if (msg.type === "interactive" && msg.interactive && msg.interactive.button_reply) {
-    return quickReply(env, recipient, String(msg.interactive.button_reply.id || ""), msg.context && msg.context.id);
+    return quickReply(env, recipients, String(msg.interactive.button_reply.id || ""), msg.context && msg.context.id);
   }
   if (!text) return;
   if (/^stop$/i.test(text)) {
-    await run(env, "UPDATE recipients SET state = 'opted_out', updated_at = ? WHERE device_id = ?", now(), recipient.device_id);
-    await audit(env, { device: recipient.device_id, actor: "phone", action: "opted_out" });
+    for (const r of recipients) {
+      await run(env, "UPDATE recipients SET state = 'opted_out', updated_at = ? WHERE device_id = ?", now(), r.device_id);
+      await audit(env, { device: r.device_id, actor: "phone", action: "opted_out" });
+    }
     return reply(env, recipient, "You won't get Clips Kitty messages anymore. Send START to turn them back on.");
   }
-  if (/^start$/i.test(text) && recipient.state === "opted_out") {
-    await run(env, "UPDATE recipients SET state = 'confirmed', updated_at = ? WHERE device_id = ?", now(), recipient.device_id);
-    await audit(env, { device: recipient.device_id, actor: "phone", action: "opted_in" });
+  if (/^start$/i.test(text) && recipients.some((r) => r.state === "opted_out")) {
+    for (const r of recipients.filter((x) => x.state === "opted_out")) {
+      await run(env, "UPDATE recipients SET state = 'confirmed', updated_at = ? WHERE device_id = ?", now(), r.device_id);
+      await audit(env, { device: r.device_id, actor: "phone", action: "opted_in" });
+    }
     return reply(env, recipient, "Clips Kitty messages are back on.");
   }
-  if (recipient.state === "confirmed" && /\b(yes|yep|approve|approved|ok|okay|publish|post it|go)\b/i.test(text)) {
+  if (recipients.some((r) => r.state === "confirmed") && /\b(yes|yep|approve|approved|ok|okay|publish|post it|go)\b/i.test(text)) {
     // A bare "yes" never approves anything: it can't say which clips, where, or for which video.
     return reply(env, recipient, "To publish, open the Review clips link in the message about that video, choose the clips and where they go, and approve there with your PIN.");
   }
 }
 
-async function findRecipient(env, from, userId) {
+async function findRecipients(env, from, userId) {
+  const states = "state IN ('confirmed', 'awaiting_confirm', 'opted_out')";
   if (from) {
-    const r = await one(env, "SELECT * FROM recipients WHERE wa_id = ? AND state IN ('confirmed', 'awaiting_confirm', 'opted_out')", from);
-    if (r) return r;
+    const rows = await all(env, `SELECT * FROM recipients WHERE wa_id = ? AND ${states} ORDER BY updated_at DESC`, from);
+    if (rows.length) return rows;
   }
-  if (userId) return one(env, "SELECT * FROM recipients WHERE user_id = ? AND state IN ('confirmed', 'awaiting_confirm', 'opted_out')", userId);
-  return null;
+  if (userId) return all(env, `SELECT * FROM recipients WHERE user_id = ? AND ${states} ORDER BY updated_at DESC`, userId);
+  return [];
 }
 
 async function pairFromPhone(env, from, userId, code) {
@@ -830,11 +841,13 @@ async function pairFromPhone(env, from, userId, code) {
   return reply(env, who, `Almost done. On your PC, confirm that the number ending in ${from ? from.slice(-4) : "(hidden)"} is yours.`);
 }
 
-async function quickReply(env, recipient, payload, contextId) {
+async function quickReply(env, recipients, payload, contextId) {
   const m = payload.match(/^(REMIND|CANCEL):(apr_[0-9a-f]{24})$/);
-  if (!m || recipient.state !== "confirmed") return;
-  const approval = await one(env, "SELECT * FROM approvals WHERE id = ? AND device_id = ?", m[2], recipient.device_id);
-  if (!approval) return;
+  if (!m) return;
+  const approval = await one(env, "SELECT * FROM approvals WHERE id = ?", m[2]);
+  // Only the number paired with the PC that made this offer can act on it.
+  const recipient = approval && recipients.find((r) => r.device_id === approval.device_id);
+  if (!recipient || recipient.state !== "confirmed") return;
   // The tap must come from a message we sent for this very offer.
   if (contextId) {
     const sent = await one(env, "SELECT approval_id FROM messages WHERE wamid = ?", contextId);

@@ -50,8 +50,8 @@ SCRIPT = "CLIPSKITTY_SCRIPT"  # the running script, for multiprocessing children
 # checks this against the repository, so a new engine package can't be missed.
 ENGINE_PACKAGES = frozenset({
     "analysis", "campaigns", "connected_accounts", "core", "creator", "gaming", "llm", "longform",
-    "main", "multilingual", "plugins", "publish", "remote_render", "server", "sources", "sports",
-    "stream_workflows", "third_party", "transcription", "video", "video_editor",
+    "main", "multilingual", "plugins", "publish", "remote_approval", "remote_render", "server", "sources",
+    "sports", "stream_workflows", "third_party", "transcription", "video", "video_editor",
     "_clipskitty_script_host",
 })
 
