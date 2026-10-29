@@ -1,10 +1,64 @@
+# Clips Kitty — Meta AI Basketball Highlights & Remote Publishing
+
+**AI basketball highlights with E-BARD tracking, Meta Muse models, WhatsApp
+notifications, and remote Instagram/Facebook/Threads publishing.**
+
+This is the Meta Global AI Developer Hackathon edition of
+[Clips Kitty](https://github.com/ColinGPT9/clips-studio). Your Windows PC
+finds a basketball game's highlights locally (E-BARD ball and player
+tracking, YOLO, OpenCV, scoreboard reading, 9:16 crops), then:
+
+1. **WhatsApp tells you they're ready**, with the real counts: *"5 clips:
+   2 dunks, 1 three, 1 block and 1 steal"*. (WhatsApp Business Cloud API.)
+2. **You approve from your phone.** Pick the clips and where they go,
+   confirm, enter your PIN. Nothing is ever posted without that.
+3. **The PC publishes the files it already rendered** as Instagram Reels,
+   Facebook Page Reels and a Threads post, through Meta's official APIs.
+4. **WhatsApp confirms** only what the APIs confirmed, with the links.
+
+**Muse Spark** writes every clip's titles, captions and hashtags in one
+cached request; **Muse Voice Transcribe** can transcribe the commentary,
+with Whisper as the fallback. The video and the vision models never leave
+your PC, and the PC never opens a port: it talks out to a small relay you
+own (one Cloudflare Worker), which holds Meta's tokens.
+
+<p align="center">
+  <img src="docs/hackathon/meta/img/2_filled.png" alt="The approval page on a phone: clips with thumbnails, Instagram, Facebook and Threads, a confirm box and a PIN" width="260">
+  <img src="docs/hackathon/meta/img/4_results.png" alt="The status page: nine posts published, each with the link the API returned" width="260">
+</p>
+
+**Try it in two minutes, no accounts needed** (Meta faked, real code):
+
+```
+pip install pyyaml requests
+python scripts/meta_demo.py        # needs Node 22.5+ and ffmpeg
+```
+
+| | |
+|---|---|
+| What's new vs. the original | [NEW_WORK.md](docs/hackathon/meta/NEW_WORK.md) (forked at `6245e02`) |
+| How it fits together | [ARCHITECTURE.md](docs/hackathon/meta/ARCHITECTURE.md) |
+| Approval rules | [REMOTE_APPROVAL.md](docs/hackathon/meta/REMOTE_APPROVAL.md) · [SECURITY.md](docs/hackathon/meta/SECURITY.md) |
+| Setting it up | [WHATSAPP_SETUP.md](docs/hackathon/meta/WHATSAPP_SETUP.md) · [META_PUBLISHING.md](docs/hackathon/meta/META_PUBLISHING.md) · [meta-relay/](meta-relay/README.md) |
+| Judges | [JUDGE_SETUP.md](docs/hackathon/meta/JUDGE_SETUP.md) · [DEMO_SCRIPT.md](docs/hackathon/meta/DEMO_SCRIPT.md) · [TEST_LOG.md](docs/hackathon/meta/TEST_LOG.md) · [SUBMISSION.md](docs/hackathon/meta/SUBMISSION.md) |
+
+Inspired by the Toronto Raptors and by highlight accounts like House of
+Highlights. **This project is not affiliated with, endorsed by, or
+sponsored by Meta, House of Highlights, the NBA, or the Toronto Raptors.**
+Licensed AGPL-3.0-or-later, like the original; its history and attribution
+are kept intact below.
+
+---
+
+The rest of this page is the original Clips Kitty README.
+
 <div align="center">
 
 **English** · [简体中文](docs/readme/README_zh.md) · [日本語](docs/readme/README_ja.md) · [한국어](docs/readme/README_ko.md) · [Türkçe](docs/readme/README_tr.md) · [Русский](docs/readme/README_ru.md) · [Tiếng Việt](docs/readme/README_vi.md) · [ไทย](docs/readme/README_th.md) · [Deutsch](docs/readme/README_de.md) · [Español](docs/readme/README_es.md) · [Français](docs/readme/README_fr.md) · [Português (Brasil)](docs/readme/README_pt-BR.md) · [العربية](docs/readme/README_ar.md) · [Bahasa Indonesia](docs/readme/README_id.md) · [Italiano](docs/readme/README_it.md) · [हिन्दी](docs/readme/README_hi.md) · [বাংলা](docs/readme/README_bn.md) · [Filipino](docs/readme/README_tl.md) · [اردو](docs/readme/README_ur.md)
 
 </div>
 
-# Clips Kitty: the free, open-source Opus Clip alternative for chatting, gaming and sports, on your own PC
+## Clips Kitty: the free, open-source Opus Clip alternative for chatting, gaming and sports, on your own PC
 
 <a href="https://apps.microsoft.com/detail/9NB6XT7DSQZZ">
   <picture>
