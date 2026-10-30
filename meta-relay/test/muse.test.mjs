@@ -204,12 +204,14 @@ describe("keys", () => {
 
   it("keeps Muse keys and the PC's signature apart", async () => {
     const key = await makeKey();
-    for (const path of ["/v1/status", "/v1/commands"]) {
-      const res = await call(new Request(`${BASE}${path}`, { headers: { Authorization: `Bearer ${key}` } }));
+    // Refused by the key check itself, before anything looks for the PC's
+    // signature (which a key-only request would fail anyway), and on
+    // /v1/devices before any enrolment.
+    for (const [method, path] of [["GET", "/v1/status"], ["GET", "/v1/commands"], ["POST", "/v1/muse/token"], ["POST", "/v1/devices"]]) {
+      const res = await call(new Request(`${BASE}${path}`, { method, headers: { Authorization: `Bearer ${key}` }, body: method === "POST" ? "{}" : undefined }));
       assert.equal(res.status, 401, path);
+      assert.deepEqual(await res.json(), { code: "forbidden", error: "A Muse key can't call this PC's routes." }, path);
     }
-    const minted = await call(new Request(`${BASE}/v1/muse/token`, { method: "POST", headers: { Authorization: `Bearer ${key}` }, body: "{}" }));
-    assert.equal(minted.status, 401);
     const asPc = await call(signed(BASE, DEVICE, SECRET, "POST", "/mcp", { jsonrpc: "2.0", id: 1, method: "tools/list" }));
     assert.equal(asPc.status, 401);
     const restAsPc = await call(signed(BASE, DEVICE, SECRET, "GET", "/muse/v1/status"));
