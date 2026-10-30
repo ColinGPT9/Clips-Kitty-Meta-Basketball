@@ -122,34 +122,37 @@ def csrf_of(html):
     return re.search(r'name="csrf" value="([0-9a-f]{64})"', html)[1]
 
 
-@pytest.fixture
-def pc(db, tmp_path, relay_url, monkeypatch):
-    """A PC set up the way Settings does it: registered with the relay,
-    WhatsApp paired and confirmed, a PIN, Facebook (with its Instagram) and
-    Threads connected, remote approval on."""
-    phone = Phone(relay_url)
-    ra_settings.save(db, {"whatsapp_enabled": True, "relay_url": relay_url})
-    # Each test gets its own PC (a new device) on the shared relay.
-    service.register(db, tmp_path, ENROLL_KEY)
-    relay = service.client(db, tmp_path)
-    code = relay.pair_start()["code"]
-    phone.send(f"LINK {code}")
-    assert "confirm that the number" in phone.last_message()["text"]["body"]
-    relay.pair_confirm(True)
-    relay.set_pin(PIN)
-    for platform in ("facebook", "threads"):
-        assert phone.oauth(relay.accounts_connect(platform)["url"])["ok"]
-    service.refresh_status(db, relay)
-    assert service.can_enable_remote_approval(db) == ""
-    ra_settings.save(db, {"remote_approvals": True, "preferred_destinations": ["instagram"]})
-    service.push_preferences(db, relay)
+class Muse:
+    """The creator's Muse agent: its servers calling the relay's MCP server
+    with the key from Settings, the way a custom connector does."""
 
+    def __init__(self, url, key):
+        self.url = url
+        self.key = key
+        self.n = 0
+
+    def rpc(self, method, params=None):
+        self.n += 1
+        r = requests.post(self.url + "/mcp", json={"jsonrpc": "2.0", "id": self.n, "method": method, "params": params or {}},
+                          headers={"Authorization": f"Bearer {self.key}", "Accept": "application/json, text/event-stream"},
+                          timeout=10)
+        assert r.status_code == 200, r.text
+        return r.json()["result"]
+
+    def tool(self, name, **args):
+        result = self.rpc("tools/call", {"name": name, "arguments": args})
+        assert result["isError"] is False, result["content"][0]["text"]
+        return result["structuredContent"]
+
+
+def _runner(db, tmp_path, monkeypatch) -> dict:
+    """The PC's relay pass and its publish worker, run by hand. The real
+    client through the real relay; only its waits between status reads are
+    skipped."""
     from publish.meta_graph import MetaGraph
     from remote_approval.relay import Relay
     from server import publisher
 
-    # The real client through the real relay; only its waits between status
-    # reads are skipped.
     monkeypatch.setattr(publishing, "make_graph",
                         lambda config, device: MetaGraph(Relay(config["relay_url"], **device), sleep=lambda s: None))
     worker = publisher.PublishWorker({}, tmp_path / "state.db", tmp_path)
@@ -171,7 +174,53 @@ def pc(db, tmp_path, relay_url, monkeypatch):
             n += 1
         return n
 
-    return {"phone": phone, "relay": relay, "tick": tick, "publish_all": publish_all, "dir": tmp_path}
+    return {"tick": tick, "publish_all": publish_all}
+
+
+@pytest.fixture
+def pc(db, tmp_path, relay_url, monkeypatch):
+    """A PC set up the way Settings does it: registered with the relay,
+    WhatsApp paired and confirmed, a PIN, Facebook (with its Instagram) and
+    Threads connected, remote approval on."""
+    phone = Phone(relay_url)
+    ra_settings.save(db, {"whatsapp_enabled": True, "relay_url": relay_url})
+    # Each test gets its own PC (a new device) on the shared relay.
+    service.register(db, tmp_path, ENROLL_KEY)
+    relay = service.client(db, tmp_path)
+    code = relay.pair_start()["code"]
+    phone.send(f"LINK {code}")
+    assert "confirm that the number" in phone.last_message()["text"]["body"]
+    relay.pair_confirm(True)
+    relay.set_pin(PIN)
+    for platform in ("facebook", "threads"):
+        assert phone.oauth(relay.accounts_connect(platform)["url"])["ok"]
+    service.refresh_status(db, relay)
+    assert service.can_enable_remote_approval(db) == ""
+    ra_settings.save(db, {"remote_approvals": True, "preferred_destinations": ["instagram"]})
+    service.push_preferences(db, relay)
+    return {"phone": phone, "relay": relay, **_runner(db, tmp_path, monkeypatch), "dir": tmp_path}
+
+
+@pytest.fixture
+def muse_pc(db, tmp_path, relay_url, monkeypatch):
+    """A PC set up for Muse alone: registered, a PIN, Facebook (with its
+    Instagram) and Threads connected, a Muse key made, remote approval on.
+    No WhatsApp number is paired, and WhatsApp messages stay off."""
+    phone = Phone(relay_url)
+    ra_settings.save(db, {"relay_url": relay_url})
+    service.register(db, tmp_path, ENROLL_KEY)
+    relay = service.client(db, tmp_path)
+    relay.set_pin(PIN)
+    for platform in ("facebook", "threads"):
+        assert phone.oauth(relay.accounts_connect(platform)["url"])["ok"]
+    key = service.make_muse_key(db, relay)
+    service.refresh_status(db, relay)
+    assert ra_settings.load(db)["whatsapp_enabled"] is False
+    assert service.can_enable_remote_approval(db) == ""
+    ra_settings.save(db, {"remote_approvals": True, "preferred_destinations": ["instagram"]})
+    service.push_preferences(db, relay)
+    return {"phone": phone, "relay": relay, "muse": Muse(relay_url, key), **_runner(db, tmp_path, monkeypatch),
+            "dir": tmp_path}
 
 
 def test_a_finished_game_goes_from_whatsapp_to_three_platforms(db, pc):
@@ -333,3 +382,75 @@ def test_an_undelivered_offer_can_be_sent_again_with_a_new_link(db, pc):
     assert 'name="pin"' not in html
     _, html = phone.open(new_token)
     assert 'name="pin"' in html
+
+
+# ---- the creator's Muse agent -------------------------------------------------------------
+
+
+def test_muse_lists_the_offer_hands_over_the_link_and_reads_what_got_posted(db, pc, relay_url):
+    phone = pc["phone"]
+    muse = Muse(relay_url, service.make_muse_key(db, pc["relay"]))
+    hello = muse.rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                                    "clientInfo": {"name": "muse", "version": "1"}})
+    assert hello["protocolVersion"] == "2025-06-18" and "own PIN" in hello["instructions"]
+    before = len(phone.state()["posts"])
+    review_id = notifier.on_job_finished(db, finished_job(db, pc["dir"], title="Some Team vs Other Team"), "done")
+    pc["tick"]()
+    review = store.get_review(db, review_id)
+
+    [offer] = muse.tool("list_ready_highlights")["offers"]
+    assert offer["approval_id"] == review["approval_id"] and offer["title"] == "Some Team vs Other Team"
+    assert [c["clip_id"] for c in offer["clips"]] == [c["clip_id"] for c in review["clips"]]
+    link = muse.tool("get_approval_link", approval_id=review["approval_id"])["url"]
+    assert link == f"{relay_url}/a/{phone.link_token(phone.last_message())}"  # the link WhatsApp carries
+
+    # The creator opens it and approves there, with the PIN. Muse never sees it.
+    token = link.rsplit("/a/", 1)[1]
+    _, html = phone.open(token)
+    status, html = phone.submit(token, [
+        ("csrf", csrf_of(html)), ("action", "approve"), ("clip", str(review["clips"][0]["clip_id"])),
+        ("platform", "instagram"), ("platform", "facebook"), ("confirm", "yes"), ("pin", PIN),
+    ])
+    assert status == 200 and "Waiting for your PC" in html
+    assert pc["tick"]() == 1
+    assert pc["publish_all"]() == 1
+    pc["tick"]()
+    assert store.get_review(db, review_id)["state"] == states.PUBLISHED
+
+    posts = phone.state()["posts"][before:]
+    [done] = muse.tool("list_recent_posts")["offers"]
+    assert done["approval_id"] == review["approval_id"] and done["status"] == "2 of 2 posts published."
+    assert sorted(p["url"] for c in done["clips"] for p in c["posts"]) == sorted(p["permalink"] for p in posts)
+
+
+def test_muse_alone_with_no_whatsapp_number_gets_the_offer_and_its_results(db, muse_pc):
+    phone, muse = muse_pc["phone"], muse_pc["muse"]
+    messages = len(phone.state()["messages"])
+    before = len(phone.state()["posts"])
+    review_id = notifier.on_job_finished(db, finished_job(db, muse_pc["dir"], title="Some Team vs Away Team"), "done")
+    assert review_id
+    muse_pc["tick"]()
+    review = store.get_review(db, review_id)
+    assert review["state"] == states.NOTIFICATION_SENT and review["approval_id"].startswith("apr_")
+
+    [offer] = muse.tool("list_ready_highlights")["offers"]
+    assert offer["approval_id"] == review["approval_id"] and offer["kind"] == "basketball"
+    token = muse.tool("get_approval_link")["url"].rsplit("/a/", 1)[1]
+    status, html = phone.open(token)
+    assert status == 200 and "Never give it to an assistant." in html
+    muse_pc["tick"]()
+    assert store.get_review(db, review_id)["state"] == states.AWAITING_APPROVAL  # the page was opened
+    status, html = phone.submit(token, [
+        ("csrf", csrf_of(html)), ("action", "approve"), ("clip", str(review["clips"][0]["clip_id"])),
+        ("platform", "instagram"), ("confirm", "yes"), ("pin", PIN),
+    ])
+    assert status == 200 and "Waiting for your PC" in html
+    assert muse_pc["tick"]() == 1
+    assert muse_pc["publish_all"]() == 1
+    muse_pc["tick"]()
+    assert store.get_review(db, review_id)["state"] == states.PUBLISHED
+
+    [post] = phone.state()["posts"][before:]
+    [done] = muse.tool("list_recent_posts")["offers"]
+    assert [p["url"] for c in done["clips"] for p in c["posts"]] == [post["permalink"]]
+    assert len(phone.state()["messages"]) == messages  # not one WhatsApp message, start to finish

@@ -6,16 +6,18 @@ uploads. Each pass, when one is due:
 1. offers whose link has expired become EXPIRED;
 2. offers whose uploads have all finished are settled (PUBLISHED,
    PARTIAL_FAILURE or FAILED, from what the APIs confirmed) and their
-   result is queued for WhatsApp;
+   result is queued for the relay, which keeps it for the status page and
+   Muse, and sends it on WhatsApp when that is wanted;
 3. the outbox is sent to the relay, oldest first, each message once (the
    relay keys on the same event key, so a retry after a lost answer is not
    a second message);
-4. the relay is asked for decisions made on the phone; each is checked
-   (commands.py) and the relay told what became of it.
+4. the relay is asked for decisions made on the phone (or asked of Muse);
+   each is checked (commands.py) and the relay told what became of it.
 
 Pacing: every few seconds while something is open (an offer waiting, a
 message queued, an upload in flight), every couple of minutes otherwise,
-never while switched off. All of it is outbound: this PC opens no port.
+never while neither WhatsApp nor Muse is on. All of it is outbound: this PC
+opens no port.
 
 If the PC was off, nothing is lost: the relay keeps the decision, the
 approval page says "waiting for your PC", and the first pass after start
@@ -66,7 +68,7 @@ def tick(db, data_dir, state: TickState, *, relay: Relay | None = None, emit=Non
          now=None) -> int:
     """One pass, if one is due. Returns how many uploads it queued."""
     config = ra_settings.load(db)
-    if not config["whatsapp_enabled"]:
+    if not (config["whatsapp_enabled"] or ra_settings.muse_connected(config)):
         return 0
     mono = clock()
     # A message waiting to go (a job just finished) doesn't wait for the
@@ -138,10 +140,12 @@ def settle_publishing(db, config: dict) -> int:
         store.move(db, review["id"], final, actor="publisher", results=results,
                    detail=f"{totals['published']} published, {totals['failed']} failed, "
                           f"{totals['unconfirmed']} unconfirmed")
-        if config["notify_on_publish"]:
-            nth = len([r for r in store.audit_log(db, review["id"], 500) if r["action"] in
-                       (states.PUBLISHED.lower(), states.PARTIAL_FAILURE.lower(), states.FAILED.lower())])
-            store.enqueue(db, f"result:review:{review['id']}:{nth}", "result", review_id=review["id"])
+        # Always sent, so the status page and Muse ("what got posted?") have
+        # it. The relay keeps it first and messages WhatsApp only when
+        # notify_on_publish is on (push_preferences tells it).
+        nth = len([r for r in store.audit_log(db, review["id"], 500) if r["action"] in
+                   (states.PUBLISHED.lower(), states.PARTIAL_FAILURE.lower(), states.FAILED.lower())])
+        store.enqueue(db, f"result:review:{review['id']}:{nth}", "result", review_id=review["id"])
         settled += 1
     return settled
 
@@ -220,7 +224,7 @@ def result_text(results: dict) -> str:
 #: Relay answers that mean "this will not work by waiting": the message is
 #: marked failed at once, with the relay's own words, for Settings to show.
 PERMANENT = {"not_paired", "not_confirmed", "opted_out", "template_missing", "template_not_approved",
-             "bad_request", "not_registered", "forbidden"}
+             "bad_request", "not_registered", "forbidden", "no_channel"}
 
 
 def flush_outbox(db, data_dir, relay: Relay, *, now=None) -> int:
@@ -303,6 +307,8 @@ def build_body(db, data_dir, item: dict) -> dict:
         "expires_at": review["expires_at"],
         "title": review["title"],
         "summary_text": summary.ready_text(review["summary"]),
+        # basketball, gaming or video: for Muse to say what kind of video it was.
+        "video_kind": review["summary"].get("kind") or "",
         "counts": review["summary"].get("counts") or {},
         "muse_line": muse_line,
         "remote_approvals": bool(config["remote_approvals"]),
@@ -367,8 +373,17 @@ def refresh_status(db, relay: Relay) -> dict:
         "pin_set": bool(status.get("pin_set")),
         "accounts": status.get("accounts") or {},
         "templates": status.get("templates") or {},
+        "muse": _muse_state(status.get("muse")),
     }, internal=True)
     return status
+
+
+def _muse_state(block) -> dict:
+    """The relay's word on this PC's Muse key, in the only fields kept: whether
+    one works, and when it was made and last used. Never the key."""
+    block = block if isinstance(block, dict) else {}
+    return {"enabled": bool(block.get("enabled")), "created_at": int(block.get("created_at") or 0),
+            "last_used": int(block.get("last_used") or 0)}
 
 
 # ---- actions from Settings --------------------------------------------------------------
@@ -394,11 +409,13 @@ def register(db, data_dir, enroll_key: str) -> dict:
 
 
 def push_preferences(db, relay: Relay) -> None:
-    """What the relay needs to know to answer the phone on its own: which
+    """What the relay needs to know to answer the phone on its own: whether
+    WhatsApp is wanted at all (off, offers are only kept for Muse), which
     messages are wanted, whether approving is allowed, the destinations to
     tick in advance, and how long "Remind me later" waits."""
     config = ra_settings.load(db)
     relay.preferences({
+        "whatsapp_enabled": bool(config["whatsapp_enabled"]),
         "notify_on_finish": bool(config["notify_on_finish"]),
         "notify_on_fail": bool(config["notify_on_fail"]),
         "notify_on_publish": bool(config["notify_on_publish"]),
@@ -409,15 +426,38 @@ def push_preferences(db, relay: Relay) -> None:
 
 
 def can_enable_remote_approval(db) -> str:
-    """"" when remote approval may be switched on, else why not."""
+    """"" when remote approval may be switched on, else why not. A connected
+    Muse agent stands in for a paired WhatsApp number: either way the offer
+    reaches the creator's phone, and the PIN is still asked on the page."""
     config = ra_settings.load(db)
-    if not config["whatsapp_enabled"]:
-        return "Turn on WhatsApp notifications first."
-    if (config["pairing"] or {}).get("state") != "confirmed":
-        return "Pair and confirm your WhatsApp number first."
+    if not ra_settings.muse_connected(config):
+        if not config["whatsapp_enabled"]:
+            return "Connect your Muse agent, or turn on WhatsApp notifications, first."
+        if (config["pairing"] or {}).get("state") != "confirmed":
+            return "Pair and confirm your WhatsApp number, or connect your Muse agent, first."
     if not config["pin_set"]:
         return "Set an approval PIN first. The approval page asks for it before anything is published."
     return ""
+
+
+def make_muse_key(db, relay: Relay) -> str:
+    """A new key for the creator's Muse agent, replacing any older one. It
+    is returned for Settings to show once and is not kept, logged or queued
+    anywhere on this PC: the relay keeps its hash, Muse keeps the key."""
+    got = relay.muse_token()
+    ra_settings.save(db, {"muse": _muse_state(got.get("muse"))}, internal=True)
+    return str(got.get("key") or "")
+
+
+def revoke_muse_key(db, relay: Relay) -> None:
+    """Stop the Muse key working. With no paired WhatsApp number left either,
+    approving from the phone switches off, as unpairing does: nothing can
+    reach the creator any more."""
+    got = relay.muse_revoke()
+    ra_settings.save(db, {"muse": _muse_state(got.get("muse"))}, internal=True)
+    config = ra_settings.load(db)
+    if not (config["whatsapp_enabled"] and (config["pairing"] or {}).get("state") == "confirmed"):
+        ra_settings.save(db, {"remote_approvals": False})
 
 
 def send_test(db) -> bool:
@@ -515,10 +555,11 @@ def retry_failed(db, review_id: int) -> int:
 
 
 def disconnect(db, data_dir) -> None:
-    """Disconnect from Settings: the relay forgets this PC (its number, its
-    PIN, its Meta accounts, its open offers), then this PC forgets its device
-    secret. Open offers here are cancelled. Works even when the relay can't
-    be reached: this PC stops either way."""
+    """Disconnect from Settings: the relay unpairs the WhatsApp number,
+    cancels this PC's open offers and stops its Muse key working, then this
+    PC forgets its device secret, so it can't sign anything to the relay
+    again until it is connected anew. Open offers here are cancelled. Works
+    even when the relay can't be reached: this PC stops either way."""
     relay = client(db, data_dir)
     if relay is not None:
         try:
@@ -535,7 +576,7 @@ def disconnect(db, data_dir) -> None:
     db.conn.commit()
     ra_settings.forget_device(data_dir)
     ra_settings.save(db, {"whatsapp_enabled": False, "remote_approvals": False, "pairing": {}, "pin_set": False,
-                          "accounts": {}, "templates": {}}, internal=True)
+                          "accounts": {}, "templates": {}, "muse": {}}, internal=True)
 
 
 def review_view(db, review: dict, *, detail: bool = False) -> dict:

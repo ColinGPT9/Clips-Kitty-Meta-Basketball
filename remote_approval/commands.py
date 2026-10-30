@@ -20,6 +20,11 @@ creator's name and a relay is a server on the internet:
 
 A generic "yes" cannot pass: an approve names its offer, its fingerprint,
 its clips and its platforms, or it is refused.
+
+A defer or cancel asked of the creator's Muse agent carries via "muse",
+inside what the relay signed, and is logged as Muse's. An approve never
+comes from Muse (the relay has no way to make one), and one that says it
+does is refused here as well.
 """
 
 import json
@@ -76,15 +81,22 @@ def handle(db, command: dict, *, secret: str, now=None) -> Outcome:
     except states.IllegalMove as e:
         result = Outcome("ignored", _already(e.current))
     result.review_id = review["id"]
-    return _record(db, cid, review["id"], kind, result)
+    return _record(db, cid, review["id"], kind, result, via=str(command.get("via") or ""))
 
 
-def _record(db, cid: str, review_id: int, kind: str, result: Outcome) -> Outcome:
+def _record(db, cid: str, review_id: int, kind: str, result: Outcome, *, via: str = "") -> Outcome:
     store.record_command(db, cid, review_id=review_id, kind=kind, outcome=result.outcome, reason=result.reason)
     if review_id:
-        store.audit(db, review_id, "phone" if kind in ("approve", "cancel", "defer") else "relay",
-                    f"{kind}_{result.outcome}", result.reason)
+        store.audit(db, review_id, _actor(kind, via), f"{kind}_{result.outcome}", result.reason)
     return result
+
+
+def _actor(kind: str, via: str) -> str:
+    """Who decided: the creator's Muse agent or the phone (the approval page,
+    a WhatsApp button) for a decision, the relay for everything else."""
+    if kind not in ("approve", "cancel", "defer"):
+        return "relay"
+    return "muse" if via == "muse" else "phone"
 
 
 def _already(state: str) -> str:
@@ -104,6 +116,8 @@ def _already(state: str) -> str:
 
 
 def _approve(db, review: dict, command: dict, now) -> Outcome:
+    if command.get("via") == "muse":
+        return Outcome("rejected", "An assistant can't approve publishing. Approve on the approval page with your PIN.")
     config = ra_settings.load(db)
     if not config["remote_approvals"]:
         return Outcome("rejected", "Remote approval is switched off on this PC.")
@@ -217,19 +231,20 @@ def _ints(values) -> list[int]:
 
 
 def _cancel(db, review: dict, command: dict, now) -> Outcome:
+    actor = _actor("cancel", str(command.get("via") or ""))
     if review["state"] == states.PUBLISH_QUEUED:
         stopped = cancel_queued(db, review["id"])
         if stopped and not running_jobs(db, review["id"]):
-            store.move(db, review["id"], states.CANCELLED, actor="phone", detail=f"{stopped} upload(s) stopped")
+            store.move(db, review["id"], states.CANCELLED, actor=actor, detail=f"{stopped} upload(s) stopped")
             return Outcome("accepted", "Cancelled before anything was posted.")
         return Outcome("rejected", "Publishing has already started, so it can't be cancelled from the phone.")
-    store.move(db, review["id"], states.CANCELLED, actor="phone")
+    store.move(db, review["id"], states.CANCELLED, actor=actor)
     return Outcome("accepted", "Cancelled. Nothing was posted.")
 
 
 def _defer(db, review: dict, command: dict, now) -> Outcome:
     remind_at = store.parse(command.get("remind_at") or "")
-    store.move(db, review["id"], states.DEFERRED, actor="phone",
+    store.move(db, review["id"], states.DEFERRED, actor=_actor("defer", str(command.get("via") or "")),
                remind_at=store.stamp(remind_at) if remind_at else "")
     return Outcome("accepted", "Reminder set.")
 
