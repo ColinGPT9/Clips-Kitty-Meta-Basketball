@@ -304,10 +304,11 @@ export default function ConnectedAccountsCard({
   // The channel goes in through the same Add a channel route the Watch page
   // uses, with the same choices, once the connection has proved it is this
   // account. Settings has no Add form: there the Generate bar's settings apply
-  // and its clips wait for the person before anything is published.
+  // and its clips go to the phone for approval, as the Watch page's do unless
+  // told otherwise, so nothing is published without the person.
   const watch = (account: ConnectedAccount): Promise<void> => act(async () => {
     await connectedAccounts.test(account.id)
-    const choices = watchChoices?.() ?? { options: seedOptions() }
+    const choices = watchChoices?.() ?? { publish: { mode: 'phone' as const }, options: seedOptions() }
     const added = await api.addWatch('twitch', account.login, choices.publish, choices.options)
     const automation = await api.automation().catch(() => null)
     if (!mounted.current) return

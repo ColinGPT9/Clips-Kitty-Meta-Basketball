@@ -818,6 +818,17 @@ ipcMain.handle('pick-plugin-folder', async () => {
   return result.canceled ? null : result.filePaths[0]
 })
 
+// Folder picker for watching a folder: a Google Drive for desktop, Dropbox or
+// OneDrive folder whose new videos are clipped. The engine checks the path
+// again (a real folder on this PC, never a network one) before it watches it.
+ipcMain.handle('pick-watch-folder', async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Choose the folder to watch',
+    properties: ['openDirectory']
+  })
+  return result.canceled ? null : result.filePaths[0]
+})
+
 // Folder picker for choosing where exported clips are saved.
 ipcMain.handle('pick-folder', async () => {
   const result = await dialog.showOpenDialog({

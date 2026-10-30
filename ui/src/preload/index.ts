@@ -44,6 +44,8 @@ contextBridge.exposeInMainWorld('studio', {
   openCatalogLink: (url: string, ours: boolean): Promise<boolean> =>
     ipcRenderer.invoke('open-catalog-link', url, ours),
   pickPluginFolder: (): Promise<string | null> => ipcRenderer.invoke('pick-plugin-folder'),
+  // Folder picker for a watched folder (Google Drive for desktop, Dropbox, OneDrive).
+  pickWatchFolder: (): Promise<string | null> => ipcRenderer.invoke('pick-watch-folder'),
   // Whether closing the window keeps Clips Kitty running in the tray, for
   // watched channels. Off unless turned on; the main process remembers it.
   tray: {

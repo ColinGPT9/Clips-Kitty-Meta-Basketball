@@ -69,6 +69,9 @@ interface Window {
     openCatalogLink?: (url: string, ours: boolean) => Promise<boolean>
     /** Folder picker for installing a plugin from a folder on this PC. */
     pickPluginFolder?: () => Promise<string | null>
+    /** Folder picker for a watched folder (Google Drive for desktop, Dropbox,
+     *  OneDrive). Absent in the browser shim and in an older preload. */
+    pickWatchFolder?: () => Promise<string | null>
     /** Absent in the browser shim and in a preload older than the renderer. */
     tray?: {
       get: () => Promise<{ keepInTray: boolean }>

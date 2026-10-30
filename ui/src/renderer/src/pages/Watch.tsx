@@ -5,31 +5,31 @@ import { useEvents } from '../lib/useEvents'
 import WatchCard from '../components/watch/WatchCard'
 import WatchLive from '../components/watch/WatchLive'
 import ConnectedAccountsCard, { type WatchChoices } from '../components/ConnectedAccountsCard'
-import { useWoopAccounts } from '../components/watch/WatchPublishSettings'
-import WatchSchedule, { type ScheduleValue } from '../components/watch/WatchSchedule'
 import { seedOptions, withoutPipelineInSteps } from '../components/queue/AddVideos'
 import PipelineFields from '../components/PipelineFields'
 import { usePipelines } from '../lib/plugins'
 import type { JobOptions } from '../lib/types'
-import { platformLabel, WOOPSOCIAL_PLATFORMS } from '../lib/uploadpost'
 import { t } from '../lib/i18n'
 import { useAIStatus } from '../lib/useAIStatus'
 import OpenRouterPrompt from '../components/OpenRouterPrompt'
 import SportFields from '../components/SportFields'
 import { fitSport, sportForVertical, startingSport, useSports, verticalSports, verticalValue } from '../lib/sports'
 
-type AddMode = 'auto' | 'ask' | 'off'
+type AddMode = 'phone' | 'off'
 
+/** This edition posts through Meta's own Instagram, Facebook and Threads,
+ *  approved on the phone, so a new channel or folder is offered only these.
+ *  Where the clips go is chosen on the approval page and in Settings. */
 const ADD_MODES: { id: AddMode; label: string }[] = [
-  { id: 'auto', label: 'Clip and publish automatically (hands-off)' },
-  { id: 'ask', label: 'Clip, then ask me before publishing' },
+  { id: 'phone', label: 'Ask me on my phone' },
   { id: 'off', label: 'Only clip' }
 ]
 
 const PLACEHOLDER: Record<WatchPlatform, string> = {
   youtube: 'https://www.youtube.com/@channel or @handle',
   twitch: 'https://www.twitch.tv/channel or channel name',
-  kick: 'https://kick.com/channel or channel name'
+  kick: 'https://kick.com/channel or channel name',
+  folder: 'Choose a folder, or paste its path'
 }
 
 /** Watched channels: a creator posts, Clips Kitty clips it, nobody pastes a link.
@@ -55,19 +55,10 @@ export default function Watch({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [tray, setTray] = useState<boolean | null>(null)
-  const woop = useWoopAccounts()
-  const [addMode, setAddMode] = useState<AddMode | null>(null)
-  const [addPlatforms, setAddPlatforms] = useState<string[] | null>(null)
+  // What happens to its clips: the phone unless told otherwise.
+  const [mode, setMode] = useState<AddMode>('phone')
   // The channel just added opens its whole setup.
   const [justAdded, setJustAdded] = useState<number | null>(null)
-  // How its clips go out, chosen before Add like in the Publish dialog.
-  const [addSchedule, setAddSchedule] = useState<ScheduleValue>({
-    max_posts: 0,
-    spread: true,
-    per_day: 5,
-    gap_hours: 1,
-    day_start: ''
-  })
   // How its clips are made: the Generate bar's own settings to start with,
   // which is what "my settings" means everywhere else in the app.
   const [addClip, setAddClip] = useState<JobOptions>(() => seedOptions())
@@ -99,14 +90,11 @@ export default function Watch({
       return next
     })
   }, [sports])
-  const [addHashtags, setAddHashtags] = useState('')
-  const [addOnlyMine, setAddOnlyMine] = useState(false)
   const inFlight = useRef(false)
-  // Until touched, the add form follows what WoopSocial can do: hands-off with
-  // every connected account when it is set up, asking first when it is not.
-  const mode: AddMode = addMode ?? (woop?.ready ? 'auto' : 'ask')
-  const connected = WOOPSOCIAL_PLATFORMS.filter((id) => woop?.connected.includes(id))
-  const platforms = addPlatforms ?? connected
+  const folder = platform === 'folder'
+  // The folder picker lives in the main process; a browser or an older
+  // preload has none, and then the path can still be pasted.
+  const pickFolder = window.studio?.pickWatchFolder
 
   const refresh = useCallback(async (): Promise<void> => {
     if (inFlight.current) return
@@ -173,18 +161,19 @@ export default function Watch({
   // What the Add form says about a new channel's clips. The Twitch card's
   // "Watch my channel" uses the same choices, so both ways in agree.
   const addChoices = (): WatchChoices => ({
-    publish: {
-      mode,
-      platforms,
-      ...addSchedule,
-      hashtags: addHashtags
-        .split(/[\s,]+/)
-        .map((h) => h.replace(/^#/, '').trim())
-        .filter(Boolean),
-      ai_hashtags: !addOnlyMine
-    },
+    publish: { mode },
     options: addClip
   })
+
+  const chooseFolder = async (): Promise<void> => {
+    if (!pickFolder) return
+    try {
+      const chosen = await pickFolder()
+      if (chosen) setChannel(chosen)
+    } catch (e) {
+      setError(errorText(e))
+    }
+  }
 
   const add = async (): Promise<void> => {
     if (!channel.trim()) return
@@ -332,34 +321,52 @@ export default function Watch({
           <select
             className="input !w-36"
             value={platform}
-            onChange={(e) => setPlatform(e.target.value as WatchPlatform)}
+            onChange={(e) => {
+              const next = e.target.value as WatchPlatform
+              // A folder's path and a channel's name are never the same thing.
+              if ((next === 'folder') !== folder) setChannel('')
+              setPlatform(next)
+            }}
             aria-label={t('Platform')}
           >
             <option value="youtube">YouTube</option>
             <option value="twitch">Twitch</option>
             <option value="kick">Kick</option>
+            <option value="folder">{t('Folder')}</option>
           </select>
           <input
             className="input flex-1 min-w-64"
             value={channel}
-            placeholder={PLACEHOLDER[platform]}
+            placeholder={t(PLACEHOLDER[platform])}
             onChange={(e) => setChannel(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') void add()
             }}
-            aria-label={t('Channel')}
+            aria-label={folder ? t('Folder') : t('Channel')}
           />
+          {folder && pickFolder && (
+            <button className="btn-ghost" onClick={() => void chooseFolder()} disabled={adding}>
+              {t('Choose folder')}
+            </button>
+          )}
           <button className="btn-accent" onClick={() => void add()} disabled={adding || !channel.trim()}>
-            {adding ? t('Finding the channel…') : t('Add')}
+            {adding ? (folder ? t('Checking the folder…') : t('Finding the channel…')) : t('Add')}
           </button>
         </div>
+        {folder && (
+          <p className="text-xs text-muted">
+            {t(
+              'A Google Drive for desktop, Dropbox or OneDrive folder. In Google Drive, use Mirror files or make the folder available offline. Files are only read, never moved or changed.'
+            )}
+          </p>
+        )}
         <div className="space-y-2">
           <div className="flex items-center gap-3 flex-wrap">
-            <span className="label">{t('When it posts')}</span>
+            <span className="label">{folder ? t('When a video is added') : t('When it posts')}</span>
             <select
               className="input !w-96"
               value={mode}
-              onChange={(e) => setAddMode(e.target.value as AddMode)}
+              onChange={(e) => setMode(e.target.value as AddMode)}
               aria-label={t('When it posts')}
             >
               {ADD_MODES.map((m) => (
@@ -369,44 +376,11 @@ export default function Watch({
               ))}
             </select>
           </div>
-          {mode !== 'off' && woop && !woop.ready && (
-            <div className="text-sm text-warn flex items-center gap-3 flex-wrap">
-              {t('Publishing goes through WoopSocial. Add your WoopSocial API key in Settings first.')}
-              <button
-                className="btn-ghost !px-2 !py-1 text-xs"
-                onClick={() => window.dispatchEvent(new CustomEvent('open-settings'))}
-              >
-                {t('Open Settings')}
-              </button>
-            </div>
-          )}
-          {mode !== 'off' && woop?.ready && (
-            <div className="flex items-center gap-x-5 gap-y-2 flex-wrap text-sm">
-              <span className="label">{t('Publish to')}</span>
-              {connected.length === 0 ? (
-                <span className="text-muted">
-                  {t('No accounts are connected to WoopSocial yet. Connect them in Settings.')}
-                </span>
-              ) : (
-                connected.map((id) => (
-                  <label key={id} className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      className="size-4 accent-[#38BDF8]"
-                      checked={platforms.includes(id)}
-                      onChange={(e) =>
-                        setAddPlatforms(
-                          e.target.checked
-                            ? [...platforms, id]
-                            : platforms.filter((x) => x !== id)
-                        )
-                      }
-                    />
-                    {platformLabel(id)}
-                  </label>
-                ))
-              )}
-            </div>
+          {mode === 'phone' && (
+            <p className="text-xs text-muted">
+              {t('You approve from your Muse agent or WhatsApp. Nothing posts without your PIN.')}{' '}
+              {t('Where the clips go is chosen there, and in Settings → Notifications & Remote Approval.')}
+            </p>
           )}
           <div className="flex items-center gap-x-5 gap-y-2 flex-wrap text-sm">
             <span className="label">{t('Clips')}</span>
@@ -544,38 +518,11 @@ export default function Watch({
               </select>
             </div>
           )}
-          {mode !== 'off' && (
-            <>
-              <WatchSchedule value={addSchedule} onChange={setAddSchedule} />
-              <div className="text-sm space-y-1">
-                <label className="label block" htmlFor="add-watch-tags">
-                  {t('Hashtags on every post')}
-                </label>
-                <input
-                  id="add-watch-tags"
-                  className="input"
-                  value={addHashtags}
-                  placeholder="#creatorname #twitch"
-                  onChange={(e) => setAddHashtags(e.target.value)}
-                />
-                <label className="flex items-center gap-2 cursor-pointer text-sm">
-                  <input
-                    type="checkbox"
-                    className="size-4 accent-[#38BDF8]"
-                    checked={addOnlyMine}
-                    onChange={(e) => setAddOnlyMine(e.target.checked)}
-                  />
-                  {t('Only use my hashtags')}
-                  <span className="text-muted text-xs">{t('(leave out the ones the AI picks)')}</span>
-                </label>
-              </div>
-            </>
-          )}
         </div>
         <p className="text-xs text-muted">
-          {mode === 'auto'
+          {folder
             ? t(
-                'From now on, each new video is queued, clipped and published on the schedule above, with nobody at the PC. Videos already on the channel are listed but not clipped. Per-platform settings and caption text open after you add it.'
+                'Videos already in the folder are listed but not clipped. Only what is added from now on is, once it has finished copying, unless you pick one yourself.'
               )
             : t(
                 'Videos already on the channel are listed but not clipped. Only what it posts from now on is, unless you pick one yourself.'
