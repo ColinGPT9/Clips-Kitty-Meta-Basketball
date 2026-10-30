@@ -8,8 +8,9 @@ and every rule along the way.
 ## The flow
 
 1. **The job finishes.** The job announcer calls the notifier. For a
-   basketball `process` job with WhatsApp on (or any video, once Settings
-   has **Offer gaming and other videos too** ticked), it snapshots the best
+   basketball `process` job with WhatsApp on or a Muse agent connected (or
+   any video, once Settings has **Offer gaming and other videos too**
+   ticked, or a watch set to **Ask me on my phone** queued it), it snapshots the best
    of the clips this run made (up to `max_clips`, best score first, skipping
    missing files, Longform cuts, story reels and clips already posted
    everywhere), pins each file's size and modification time, computes a
@@ -25,7 +26,10 @@ and every rule along the way.
    steal}}. Choose where to publish them before the link expires."* with
    **Review clips**, **Remind me later** and
    **Cancel**. State: `NOTIFICATION_SENT`, then `AWAITING_APPROVAL` once
-   WhatsApp reports it delivered or the link is opened.
+   WhatsApp reports it delivered or the link is opened. With WhatsApp off and
+   a Muse agent connected, the relay keeps the offer for Muse instead and
+   sends nothing; the creator's Muse agent lists it and hands over the same
+   link ([MUSE_CONNECTOR.md](MUSE_CONNECTOR.md)).
 3. **The phone decides.** The page lists the offered clips (thumbnail, play,
    length, and what will be posted), only the platforms that are connected
    (preferred ones pre-ticked), a confirm box, and the PIN. Approve sends a
@@ -84,10 +88,26 @@ and every rule along the way.
   by a retry, and an upload cut off by a restart is reported as
   "unconfirmed: check the account" and never retried automatically (the
   existing publish worker's rule).
-- A platform a clip is already posted on, or on its way to (a post
-  WoopSocial has scheduled, an upload in progress), by any publisher, is
+- A platform a clip is already posted on, or on its way to (a post another
+  publisher has scheduled, an upload in progress), by any publisher, is
   left out of an approval and shown as skipped in the results. The approval
   page says where a clip is already posted.
+
+## Watched channels and folders
+
+A job that a watch queued follows the watch's choice first
+(`notifier.watch_choice`):
+
+- **Ask me on my phone** (the Watch page's default in this edition):
+  offered whatever kind of video it is, even with **Offer gaming and other
+  videos too** unticked. The PC never publishes such a watch's clips by
+  itself, and the engine refuses to publish them from the Watch page. The
+  video's row says *"Ready to approve from your phone."* once the offer
+  exists, or what to switch on in Settings when nothing could reach the phone.
+- A watch saved with the original app's automatic posting to Instagram,
+  Facebook or Threads is never offered as well, so a clip can't go out twice.
+- Every other job, including a watched video clipped by hand, keeps the
+  Settings rules above.
 
 ## When the PC is off
 

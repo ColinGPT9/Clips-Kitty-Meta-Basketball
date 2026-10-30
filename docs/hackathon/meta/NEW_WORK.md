@@ -53,7 +53,22 @@ Everything in that commit and before it is prior work. Run
 | Usage and cost | Muse Spark tokens (from the API's own usage block), Muse Voice audio seconds, WhatsApp template sends and Graph uploads, with estimated dollars. | `remote_approval/usage.py` |
 | Settings | Settings → Notifications & Remote Approval: connect to the relay, pair and confirm a number, PIN, connect Facebook/Instagram and Threads, which messages to get, remote approval on/off (off by default), preferred destinations, Muse options, templates, recent offers with their links and actions, estimated cost. | `server/remote_approval_api.py`, `ui/.../NotificationsApprovalCard.tsx`, `ui/.../lib/remoteApproval.ts` |
 | Demo | A narrated end-to-end run with Meta faked: `python scripts/meta_demo.py`. | `scripts/meta_demo.py`, `meta-relay/test/serve.mjs` |
-| Tests | 29 relay tests (Node), and Python unit, end-to-end and API tests for everything above. | `meta-relay/test/`, `tests/test_remote_approval*.py`, `tests/test_meta_graph.py`, `tests/test_muse.py` |
+| Tests | Relay tests under Node (29 in the first version, 58 now), and Python unit, end-to-end and API tests for everything above and below. | `meta-relay/test/`, `tests/test_remote_approval*.py`, `tests/test_meta_graph.py`, `tests/test_muse.py` |
+
+### Added on October 30, 2026
+
+| Area | What it does | Where |
+|---|---|---|
+| Your Muse agent | A connector for Muse, Meta's personal agent app, on the creator's own relay: a remote MCP server (`POST /mcp`, the `initialize` handshake and the stateless 2026-07-28 revision), the same six tools as plain HTTPS routes (`/muse/v1/...`) and an OpenAPI description (`/muse/openapi.json`). Muse can list the highlights waiting, hand over the approval link, say what got posted with the platforms' own links, and remind or cancel. No tool approves, publishes or takes a PIN. Offers work with Muse alone, with no WhatsApp number. See [MUSE_CONNECTOR.md](MUSE_CONNECTOR.md). | `meta-relay/lib/muse.js`, `meta-relay/worker.js`, `meta-relay/schema.sql` (`connector_tokens`) |
+| Muse keys | Made in Settings, one per PC, shown once and never kept on the PC. The relay keeps only a SHA-256 of each `ckm_` key, takes it only in the `Authorization` header, allows about 60 calls a minute, and refuses it on the PC's own routes. **Revoke** stops it at once. | `meta-relay/lib/muse.js`, `server/remote_approval_api.py`, `NotificationsApprovalCard.tsx` |
+| A harder PIN | Each PIN try is counted before it is checked, so guesses sent all at once can't get past the lockout. Three 15-minute lockouts in a day block approving from the phone until a new PIN is set on the PC. | `meta-relay/worker.js`, `meta-relay/lib/db.js` (`pin_lockouts`), `meta-relay/lib/page.js` |
+| Gaming and other videos | Offers stay basketball-only by default. **Offer gaming and other videos too** (Settings, **5. Approve from your phone**) adds every other finished video. Each offer is counted in its own words: plays for basketball, a game pipeline's own labels for gaming ("2 chases and a crash"), and "3 highlights" for anything else. The captions follow the same kind. | `remote_approval/summary.py`, `settings.py`, `captions.py` |
+| Only this run's clips | An offer holds only the clips the finished run made (files written after the job started), never an earlier run's. Longform cuts and story reels are never offered. | `remote_approval/notifier.py`, `server/jobs.py` |
+| Never posted twice | A platform where a clip is already posted, or on its way there (scheduled or uploading), by any publisher, is left out of the approval and shown as skipped in the results. The page says where a clip is already posted. | `remote_approval/store.py`, `commands.py`, `service.py` |
+| Watch page: Ask me on my phone | A watched YouTube, Twitch or Kick channel can send its clips to the phone for approval, so a new upload or a finished stream's VOD becomes an offer. In this edition the Watch page offers only **Ask me on my phone** (the default) and **Only clip**: posting goes through Meta's own APIs, after approval. A phone watch's videos are offered whatever kind they are. **Check now** also looks again at videos still waiting to be ready. | `server/automation.py`, `remote_approval/notifier.py`, `ui/.../pages/Watch.tsx`, `ui/.../watch/` |
+| Watch a folder | A folder on this PC, such as a Google Drive for desktop folder, watched like a channel. A video counts once it has stopped changing for 60 seconds and no other program is still writing it; online-only files wait until they are on the PC. What is in the folder when watching starts counts as earlier. A file gets the same id as when it is added by hand, so it is never clipped twice, and the original is only read. | `sources/folder_feed.py`, `sources/local_file.py`, `core/paths.py` |
+| Ask Clips Kitty on Muse Spark | With a Meta Model API key saved, the box at the bottom of the app runs on Muse Spark, whatever model picks the clips, and its corner says **Muse Spark**. Without a key it says where the key goes. Settings → AI and the sidebar say when the assistant uses Muse Spark. | `server/agent.py` (`muse_backend`), `server/api.py`, `llm/providers/catalog.py`, `ui/.../Assistant.tsx` |
+| Tests | 28 connector tests under Node, the Muse flow end to end against the real relay (with and without WhatsApp), the folder watch, the phone mode and the box on Muse Spark. | `meta-relay/test/muse.test.mjs`, `tests/test_remote_approval_e2e.py`, `tests/test_folder_feed.py`, `tests/test_automation.py`, `tests/test_agent_muse.py` |
 
 ## Files changed outside the new folders
 
@@ -75,6 +90,35 @@ Small, targeted edits to existing code (everything else is in new files):
   package compiled, bundled and listed as engine code; a CI job for the relay tests.
 - `docs/developers/api-reference.md`: regenerated (the new routes are internal).
 
+For the October 30 additions:
+
+- `server/automation.py`: the **Ask me on my phone** mode, folder watches,
+  **Check now** looking again at videos still waiting, and what a phone
+  watch's row says.
+- `server/api.py`: adding a file by hand now uses the same id and copy step
+  as a watched folder (moved to `sources/local_file.py`, unchanged); the
+  assistant's status and chat routes run on Muse Spark when a Meta key is saved.
+- `server/agent.py`: `muse_backend`, and the box's wording without a key.
+- `server/jobs.py`: hands the notifier the job's own start time and the data
+  folder, so an offer holds only that run's clips.
+- `core/paths.py`: `picked_folder`, the checks on a folder chosen to watch.
+- `llm/providers/catalog.py`: Meta tool requests ask for brief reasoning
+  (`reasoning_effort: "low"`).
+- `ui/src/main/index.ts`, `ui/src/preload/index.ts`, `ui/.../env.d.ts`: the
+  **Choose folder** dialog.
+- `ui/.../pages/Watch.tsx`, `components/watch/WatchCard.tsx`,
+  `WatchPublishSettings.tsx`, `components/queue/QueueItemSettings.tsx`,
+  `components/ConnectedAccountsCard.tsx`, `lib/steps.ts`, `lib/types.ts`:
+  Folder, the two publishing choices, the phone status, and the gaming
+  detector on an existing watch.
+- `ui/.../components/Assistant.tsx`, `AICard.tsx`, `App.tsx`,
+  `lib/aiSetup.ts`, `lib/useAIStatus.ts`, `lib/api.ts`: the box on Muse
+  Spark, and the lines that say when the assistant uses it. `lib/api.ts`
+  also sends a local file's Sports choice and clip direction, which it
+  dropped before (found in the Windows run).
+- `docs/API.md`: the folder platform, the phone mode and **Check now**.
+- `tests/test_automation.py`, `tests/test_llm_adapters.py`: tests for the above.
+
 ## Tests performed
 
 See [TEST_LOG.md](TEST_LOG.md) for the commands and results. In short: all
@@ -92,10 +136,16 @@ with the PIN → the PC picks it up, checks it, and uploads the rendered files
 → nine posts confirmed → "9 of 9 posts published" back on WhatsApp. See
 [DEMO_SCRIPT.md](DEMO_SCRIPT.md) and the screenshots in [img/](img/).
 
+The end-to-end tests also play Muse against the real relay code: it lists
+the offer, hands over the approval link, and reads what got posted, with
+and without a WhatsApp number. On Windows, the app itself was run against
+the mock relay: see [TEST_LOG.md](TEST_LOG.md).
+
 **Not yet demonstrated against live Meta services.** That needs a Meta app,
-a WhatsApp business number, a deployed relay and connected accounts, which
-need the creator's own logins. The steps are in
-[JUDGE_SETUP.md](JUDGE_SETUP.md) and [WHATSAPP_SETUP.md](WHATSAPP_SETUP.md).
+a WhatsApp business number, a deployed relay, connected accounts and a Muse
+account with the connector added, which need the creator's own logins. The
+steps are in [JUDGE_SETUP.md](JUDGE_SETUP.md), [WHATSAPP_SETUP.md](WHATSAPP_SETUP.md)
+and [MUSE_CONNECTOR.md](MUSE_CONNECTOR.md).
 
 ## Remaining limitations
 
@@ -122,3 +172,16 @@ need the creator's own logins. The steps are in
   hours; after that the creator is asked again rather than having it posted late.
 - **One relay per creator.** The relay is single-tenant by design (the
   creator's own Meta app and tokens); it is not a hosted multi-user service.
+- **Muse's connectors are not tried live yet.** Which MCP revision Muse
+  speaks, whether it accepts a key in a header or only OAuth (the relay has
+  no OAuth), and whether its servers send an `Origin` header are not
+  confirmed; [MUSE_CONNECTOR.md](MUSE_CONNECTOR.md) lists what to try.
+  Muse can't receive a message from an outside app (only calendars can), so
+  it learns about new highlights when asked, or when asked to check on a
+  schedule.
+- **The box on Muse Spark** sends `reasoning_effort: "low"` with its tools.
+  Meta's acceptance of that pairing is not yet confirmed with a live request.
+- **Folder watch and Google Drive.** Google Drive for desktop's **Stream
+  files** mode doesn't mark a file as online-only, so reading one waits on
+  Drive's download, and a streamed folder hasn't been tried. Use **Mirror
+  files**, or make the folder available offline.

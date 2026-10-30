@@ -9,6 +9,11 @@ hackathon edition. The creator deploys their own; it is single-tenant.
 - Runs Facebook Login and Threads Login, and keeps the tokens (sealed).
 - Makes the Instagram, Facebook and Threads Graph API calls for an approved
   publish, streaming the rendered file the PC sends it.
+- Hosts the connector for the creator's Muse agent: an MCP server at
+  `POST /mcp`, the same tools at `/muse/v1/...`, their OpenAPI description at
+  `/muse/openapi.json`, and a setup guide at `/muse`. Muse reads offers and
+  results and can remind or cancel; it can't approve or publish. See
+  [MUSE_CONNECTOR.md](../docs/hackathon/meta/MUSE_CONNECTOR.md).
 
 The PC only ever calls out to it with signed requests; it never calls the
 PC. See [docs/hackathon/meta/ARCHITECTURE.md](../docs/hackathon/meta/ARCHITECTURE.md)
@@ -38,7 +43,7 @@ Webhook: `https://<relay>/webhook` (fields: `messages`,
 ## Run it locally with Meta faked
 
 ```
-npm test                      # 29 tests: node --test, D1 on node:sqlite, Meta faked
+npm test                      # 58 tests: node --test, D1 on node:sqlite, Meta faked
 npm run dev                   # http://127.0.0.1:8787, prints an enrolment key
 ```
 
@@ -55,11 +60,12 @@ which it needs before Node 22.13). No npm dependencies.
 
 | File | What |
 |---|---|
-| `worker.js` | Routes, pairing, notify, the approval page's actions, commands, the Graph step gate, cron |
+| `worker.js` | Routes, pairing, notify (offers kept for Muse when WhatsApp is off), the approval page's actions, the PIN lockouts, Muse keys for the PC, commands, the Graph step gate, cron |
 | `lib/whatsapp.js` | Cloud API sends, the four templates, error meanings, the 24-hour window |
 | `lib/meta.js` | Facebook Login, Threads Login and refresh, the Graph steps, uploads to rupload |
 | `lib/page.js` | The approval and status pages (server-rendered, no JavaScript) |
 | `lib/crypto.js` | HMAC, AES-GCM sealing, PBKDF2 PIN hashing, canonical JSON |
-| `lib/db.js` | D1 helpers and the audit log |
-| `schema.sql` | The D1 schema |
+| `lib/muse.js` | The Muse connector: MCP, the REST routes, the OpenAPI description, keys and their rate limit |
+| `lib/db.js` | D1 helpers, the audit log, and the PIN lockout block |
+| `schema.sql` | The D1 schema (run it again on a relay deployed before the Muse connector: it only adds what is missing) |
 | `test/` | The harness (D1 on node:sqlite, FakeMeta), the tests, and the local server |

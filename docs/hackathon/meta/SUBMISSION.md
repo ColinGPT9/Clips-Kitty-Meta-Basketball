@@ -32,6 +32,13 @@ and the PC publishes the files it already rendered as Instagram Reels,
 Facebook Page Reels and a Threads post. WhatsApp then says what Meta's APIs
 confirmed, "3 of 3 posts published", with the links.
 
+The person running a team's socials doesn't have to start anything either.
+Clips Kitty can watch the team's YouTube channel, its Twitch VODs or a shared
+folder (a Google Drive for desktop folder, say), clip each new game by
+itself, and send the clips to the phone for approval. From anywhere, they
+can ask their **Muse agent** what's ready, get the approval link, and later
+ask what got posted. Muse never posts: the PIN page is the only way to approve.
+
 The heavy work stays local and private: the video, the vision models (E-BARD
 tracking, YOLO, OpenCV, scoreboard reading) and rendering all run on the
 creator's PC, which never opens a port. A tiny relay the creator owns (one
@@ -48,6 +55,8 @@ Cloudflare Worker) is the only thing Meta talks to.
 | **Facebook Login for Business** | Connecting the Page and its Instagram account; tokens kept on the relay only |
 | **Muse Spark** (Meta Model API) | One strict-JSON request per video writes every clip's title, Instagram caption, Facebook description, Threads post and hashtags, plus an optional summary line; cached; cost tracked from its usage block |
 | **Muse Voice Transcribe** | An option on the existing transcription path for commentary; turn-level timings kept honest (no invented word times); Whisper as fallback |
+| **Muse** (Meta's personal agent app) | A custom connector on the creator's relay: a remote MCP server with six tools, plus the same tools as REST routes with an OpenAPI description. Muse lists the highlights waiting, hands over the approval link, says what got posted, and reminds or cancels; no tool approves or posts. Works without WhatsApp. Built and tested against the real relay code; **not yet tried in the Muse app** ([MUSE_CONNECTOR.md](MUSE_CONNECTOR.md)) |
+| **Muse Spark** (the in-app assistant) | **Ask Clips Kitty**, the box at the bottom of the app, runs on Muse Spark with the app's own tools once a Meta Model API key is saved. Built and tested with Meta's API faked; one live request still to make |
 
 ## Technical depth
 
@@ -63,9 +72,17 @@ Cloudflare Worker) is the only thing Meta talks to.
   are only API-returned permalinks, partial failures are reported and
   retried without double-posting, and an upload cut off by a restart is
   "check the account", never assumed.
-- Tests: 29 relay tests under Node, and over 100 Python tests including an
-  end-to-end run of the real relay code against the real engine with only
-  Meta's servers faked.
+- Automation to the phone: a watch set to **Ask me on my phone** turns a
+  new YouTube upload, a finished Twitch stream's VOD or a file dropped in a
+  watched folder into an approval offer. A folder file counts only once it
+  has stopped changing and nothing is still writing it, gets the same id as
+  a file added by hand (never clipped twice), and is only read.
+- A Muse connector speaking both MCP eras (the `initialize` handshake and
+  the stateless 2026-07-28 revision) with per-PC keys stored only as hashes,
+  a rate limit, and a PIN that blocks phone approval after repeated lockouts.
+- Tests: 58 relay tests under Node, and about 200 Python tests for this
+  work, including end-to-end runs of the real relay code against the real
+  engine, with only Meta's servers faked, for both WhatsApp and Muse.
 
 ## Inspiration and disclaimer
 

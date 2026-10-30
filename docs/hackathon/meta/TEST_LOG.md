@@ -115,6 +115,61 @@ cover that flow against the real relay code.
 The test steps pointed to section 3 of `MORNING_RUNBOOK.md`, which is not in
 the repository; the run followed the Settings card and the docs in this folder.
 
+## Meta-edition features (October 30, 2026)
+
+Four features built after the Windows run, each reviewed and fixed on its
+own branch before merging, still with Meta faked:
+
+- Offers for gaming and other videos behind **Offer gaming and other videos
+  too**, counted in each kind's own words. An offer now holds only the clips
+  the finished run made, and `big_moment` clips count as "big moments": the
+  two problems the Windows run found. A clip is never posted twice to a
+  platform.
+- The Muse connector on the relay, with offers for Muse alone
+  ([MUSE_CONNECTOR.md](MUSE_CONNECTOR.md)).
+- **Ask me on my phone** and folder watches on the Watch page.
+- **Ask Clips Kitty** on Muse Spark.
+
+Results after merging, at `4d7078d`, on the same Windows PC:
+
+| Suite | Result |
+|---|---|
+| Full dependencies: the Meta, assistant, folder, local upload, API contract, MCP, clip-intent and plugin-docs test files | **381 passed** |
+| Full dependencies: the watcher and job test files | **695 passed**, 1 failed (below) |
+| Venv with `pyyaml requests pytest fastapi httpx`: the five Meta files, `test_agent_muse.py`, `test_folder_feed.py`, `test_ui_local_upload.py` | **180 passed**, 13 skipped (they need numpy) |
+| Relay: `cd meta-relay; npm test` | **58 passed** (30 relay, 28 connector) |
+| UI `npm run typecheck`, `ruff check .`, `git diff --check` | clean |
+| The Watch page's regression scripts (`ui/scripts/test-watch-detector.cjs`, `test-connected-accounts.cjs`) | pass |
+
+The one failure, `test_automation.py::test_the_preview_shows_the_slots_that_would_be_used`,
+is in the original app's posting schedule preview: its third slot comes out
+an hour early because the preview spans the 1 November 2026 clock change. It
+fails the same way on the commit before these features.
+
+Bugs the reviews found (fixed):
+
+- **Wrong PINs sent all at once got past the lockout.** Each guess read the
+  same failure count before any was added, so 120 guesses in bursts of 40
+  locked nothing, and the right PIN in a fourth burst approved. Each try is
+  now counted before it is checked: the same bursts check 5 PINs, lock once,
+  and approve nothing.
+- A clip another publisher had scheduled, or was still uploading, could be
+  approved for the same platform and go up twice. Posts on their way now
+  count too.
+- **Retry failed** could send an upload again that a restart had cut off,
+  which may already be up.
+- A plugin pipeline that isn't a game's own was counted as gaming.
+- A watched folder clipped a file whose copy had paused for over a minute
+  (half copied), and an online-only file held up every watch while it
+  downloaded. The watch now waits for a file no program is still writing,
+  and for online-only files to be on the PC.
+- A phone watch's row said its clips were sent based on the settings, not
+  on whether an offer was made.
+- After merging (`4d7078d`): with WhatsApp off and Muse connected, a phone
+  watch could look before its offer was made and say WhatsApp was needed.
+  It now checks Muse too, and the row says *"Ready to approve from your
+  phone."*, which is true for both.
+
 ## Not yet tested
 
 - Against live Meta services (needs the creator's Meta app, business
@@ -123,5 +178,15 @@ the repository; the run followed the Settings card and the docs in this folder.
   [META_PUBLISHING.md](META_PUBLISHING.md).
 - Approving a real offer from the Windows app (the PIN page, the fake
   uploads and the card's result): see the Windows run above.
+- The Muse connector with Muse itself: which MCP revision Muse speaks,
+  whether it takes a key in a header or needs OAuth, and whether its
+  servers send an `Origin` header ([MUSE_CONNECTOR.md](MUSE_CONNECTOR.md)).
+- **Ask Clips Kitty** against Meta's real API: its tool requests send
+  `reasoning_effort: "low"` with `max_tokens`, which only the faked API has
+  accepted so far. One live message settles it.
+- A folder in Google Drive for desktop's **Stream files** mode, which marks
+  no file as online-only.
+- The new Settings and Watch page screens by hand: so far they are checked
+  by the type check and the tests.
 - With a real basketball game through the vision pipeline: unchanged by
   this fork, so the hook was tested with clip rows and real rendered files.
