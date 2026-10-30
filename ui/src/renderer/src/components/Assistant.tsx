@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { openAISetup } from '../lib/aiSetup'
 import { api } from '../lib/api'
 import { t } from '../lib/i18n'
 import { CHECKING, isChecking, pullPercent } from '../lib/modelPull'
@@ -14,8 +15,11 @@ interface Turn {
 
 /** Ask Clips Kitty to do things in plain language.
  *
- *  A local model reads the request and calls the app's own tools: find a
- *  video, list its clips, plan uploads. It is the same tool list the MCP
+ *  A model reads the request and calls the app's own tools: find a video,
+ *  list its clips, plan uploads. In this edition that model is Muse Spark,
+ *  Meta's, whenever a Meta Model API key is saved, and the corner says so.
+ *  Without a key a local model that can call tools runs it, as before; with
+ *  neither, the box offers to add the key. It is the same tool list the MCP
  *  server gives an outside agent, so there is one set of descriptions to keep
  *  honest rather than two.
  *
@@ -52,6 +56,9 @@ export default function Assistant(): JSX.Element | null {
   // Ollama's step, for the checking text once the bytes are in.
   const [pullStatus, setPullStatus] = useState('')
   const [pullError, setPullError] = useState('')
+  // The provider whose key would make the box work ('meta'), when that is
+  // what stands in the way.
+  const [addKey, setAddKey] = useState('')
   // Where the download stands with the engine: 'asking' while the POST is on
   // its way, 'running' once the engine has said it is running it (the POST
   // came back, or its record listed it). Only a 'running' download whose
@@ -66,6 +73,7 @@ export default function Assistant(): JSX.Element | null {
         setModel(s.model)
         setReason(s.reason)
         setInstall(s.install ?? null)
+        setAddKey(s.add_key ?? '')
       })
       .catch(() => setReady(false))
   }, [])
@@ -313,6 +321,19 @@ export default function Assistant(): JSX.Element | null {
                 {t('Download failed')}: {pullError}
               </p>
             )}
+          </>
+        ) : addKey === 'meta' ? (
+          /* Nothing here can run the box, and it runs on Muse Spark: say
+             where the key goes and open that setup. Nothing is switched on
+             until the key is pasted there. */
+          <>
+            <p className="text-xs text-muted mt-1">{reason}</p>
+            <button
+              className="btn-accent !px-3 !py-1 text-sm mt-1.5"
+              onClick={() => openAISetup('meta')}
+            >
+              {t('Add a Meta Model API key')}
+            </button>
           </>
         ) : (
           <p className="text-xs text-muted mt-1">{reason || t('No model available.')}</p>

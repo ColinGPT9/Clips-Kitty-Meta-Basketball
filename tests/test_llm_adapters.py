@@ -218,6 +218,37 @@ def test_xai_and_meta_are_chat_completions_at_their_own_addresses(wire, tmp_path
     assert "X-OpenRouter-Title" not in calls[0]["headers"]  # attribution is OpenRouter's alone
 
 
+TOOL_LIST = [{"type": "function", "function": {"name": "list_videos", "parameters": {"type": "object"}}}]
+
+
+def test_meta_turns_that_offer_tools_ask_for_low_reasoning(wire, tmp_path):
+    # Meta counts the reasoning inside max_tokens; thinking at length over the
+    # tool list could leave the assistant's turn with no call and no words.
+    calls = wire(Response(200, {"choices": [{"message": {"content": "Hi."}}]}))
+    b = backend(tmp_path, "meta", "muse-spark-1.3")
+    b.chat([{"role": "user", "content": "hi"}], TOOL_LIST)
+    b.chat([{"role": "user", "content": "hi"}], [])
+    with_tools, without = (c["json"] for c in calls)
+    assert with_tools["reasoning_effort"] == "low" and with_tools["tools"] == TOOL_LIST
+    assert "reasoning_effort" not in without
+
+
+def test_clip_picking_on_meta_is_sent_exactly_as_before(wire, tmp_path):
+    from llm.providers.adapters.chat_completions import GENERATE_MAX_TOKENS
+
+    calls = wire(Response(200, {"choices": [{"message": {"content": "{}"}}]}))
+    backend(tmp_path, "meta", "muse-spark-1.3").generate("p")
+    assert calls[0]["json"] == {"model": "muse-spark-1.3", "max_tokens": GENERATE_MAX_TOKENS,
+                                "messages": [{"role": "user", "content": "p"}]}
+
+
+def test_the_other_chat_completions_providers_are_not_given_a_reasoning_effort(wire, tmp_path):
+    # The adapter is shared (OpenRouter, xAI, DeepSeek, Qwen); only Meta's entry adds it.
+    calls = wire(Response(200, {"choices": [{"message": {"content": "Hi."}}]}))
+    backend(tmp_path, "xai", "grok-4.7").chat([{"role": "user", "content": "hi"}], TOOL_LIST)
+    assert "reasoning_effort" not in calls[0]["json"] and calls[0]["json"]["tools"] == TOOL_LIST
+
+
 def test_a_blocked_xai_key_fails_the_check(wire):
     wire(Response(200, {"api_key_blocked": True}))
     spec = PROVIDERS["xai"]

@@ -2,7 +2,9 @@
  *
  *  Opens Settings with the AI card showing that provider's setup. It only
  *  opens the setup: nothing is switched on, and nothing is sent anywhere,
- *  until the user pastes their own key and picks a model there.
+ *  until the user pastes their own key and picks a model there. One exception
+ *  in this edition: a Meta key, once saved, runs the assistant on Muse Spark
+ *  with no model picked (server/agent.py, muse_backend), and the card says so.
  */
 
 const HINT = 'ai-setup'

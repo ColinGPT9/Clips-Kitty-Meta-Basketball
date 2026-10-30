@@ -36,6 +36,22 @@ def _meta_model(entry: dict) -> ModelInfo | None:
     return ModelInfo(id=model_id, name=model_id, json_schema=True, tools=True, note=note)
 
 
+def _meta_tool_turns_reason_briefly(body: dict) -> dict:
+    """Low reasoning effort on a turn that offers tools (the assistant).
+
+    Meta counts Muse Spark's reasoning inside max_tokens, and a tool turn has
+    the chat adapter's CHAT_MAX_TOKENS. Reasoning at length over the whole
+    tool list could spend all of it and leave no call and no words: an empty
+    turn, which the adapter can't tell from a finished one because it doesn't
+    read finish_reason. The captions ask for low effort the same way
+    (remote_approval/captions.py). Clip picking offers no tools, so its
+    requests are sent exactly as before.
+    """
+    if "tools" not in body:
+        return body
+    return {**body, "reasoning_effort": "low"}
+
+
 def _deepseek_model(entry: dict) -> ModelInfo | None:
     model_id = str(entry.get("id") or "")
     if not model_id or "text" not in (entry.get("output_modalities") or ["text"]):
@@ -87,6 +103,7 @@ META = ProviderSpec(
     key_url="https://dev.meta.ai/",
     pricing_url="https://dev.meta.ai/docs/pricing-rate-limits",
     privacy="Transcripts and prompts (and audio, if it transcribes) are sent to Meta with your key.",
+    body_extras=_meta_tool_turns_reason_briefly,
     model_filter=_meta_model,
     # Muse Voice Transcribe (new for the Meta hackathon edition). Turn-level
     # timings only: Meta's docs say it returns no word timestamps, so none are

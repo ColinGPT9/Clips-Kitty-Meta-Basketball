@@ -2790,9 +2790,23 @@ def create_app(config: dict, settings_path: Path) -> FastAPI:
         The app's default clip-scoring model cannot call tools, so this is a
         real question rather than a formality, and the answer belongs in the
         window instead of arriving as a confusing reply.
+
+        A saved Meta Model API key answers it first: the box then runs on
+        Muse Spark, whatever picks the clips. Without one it runs on what it
+        always has, and when nothing can, it says how to add the key.
         """
         from llm.spec import is_local, parse_spec
-        from server.agent import install_offer, usable_model
+        from server.agent import ADD_MUSE_KEY, MUSE_LABEL, muse_backend, usable_model
+
+        muse = muse_backend(config["llm"], config["llm"].get("data_dir") or data_dir)
+        if muse:
+            return {
+                "ready": True,
+                "model": MUSE_LABEL,
+                "configured": muse["backend"],
+                "reason": "",
+                "install": None,
+            }
 
         backend_spec = config["llm"].get("backend") or ""
         if not is_local(backend_spec):
@@ -2829,40 +2843,41 @@ def create_app(config: dict, settings_path: Path) -> FastAPI:
 
         configured = (config["llm"].get("backend") or "").split("/")[-1]
         model = usable_model(ollama_host, configured)
-        return {
-            "ready": bool(model),
-            "model": model,
-            "configured": configured,
-            "reason": "" if model else (
-                "No installed model can use tools. Install Gemma 4 on the Models page: "
-                "gemma4:e4b for a 6 GB graphics card, gemma4:e2b for less. "
-                "Or use OpenRouter with your own key in Settings → AI."
-            ),
-            # The build for this machine, so the box can offer the download
-            # itself and nobody has to work out which of the two they need.
-            "install": None if model else install_offer(_nvidia_vram_gb()),
-        }
+        if not model:
+            # Nothing on this PC can call tools. This edition's box runs on
+            # Muse Spark, so the way in is the user's own Meta key rather than
+            # a Gemma 4 download. add_key names the provider whose setup the
+            # box's button opens.
+            return {
+                "ready": False,
+                "model": "",
+                "configured": configured,
+                "reason": ADD_MUSE_KEY,
+                "install": None,
+                "add_key": "meta",
+            }
+        return {"ready": True, "model": model, "configured": configured, "reason": "", "install": None}
 
     @app.post("/agent/chat")
     def agent_chat(body: AgentIn):
         """One exchange with the assistant."""
         from llm.spec import is_local
-        from server.agent import run, run_cloud, usable_model
+        from server.agent import ADD_MUSE_KEY, muse_backend, run, run_cloud, usable_model
         from server.mcp import TOOLS
 
         if not body.message.strip():
             raise HTTPException(400, "Say what you would like done.")
 
-        cloud = not is_local(config["llm"].get("backend") or "")
+        # The same choice /agent/status reports: a saved Meta key runs the box
+        # on Muse Spark, even while a model on this PC picks the clips.
+        muse = muse_backend(config["llm"], config["llm"].get("data_dir") or data_dir)
+        cloud = bool(muse) or not is_local(config["llm"].get("backend") or "")
         model = ""
         if not cloud:
             configured = (config["llm"].get("backend") or "").split("/")[-1]
             model = usable_model(ollama_host, configured)
             if not model:
-                raise HTTPException(
-                    400,
-                    "No installed model can use tools. Install Gemma 4 on the Models page.",
-                )
+                raise HTTPException(400, ADD_MUSE_KEY)
 
         # The plan tool's structured items go to the window, which turns them
         # into a Confirm button; the model only needs to describe the plan.
@@ -2940,7 +2955,7 @@ def create_app(config: dict, settings_path: Path) -> FastAPI:
                 from llm.registry import create_backend
 
                 return run_cloud(body.message, body.history, TOOLS, call_tool,
-                                 create_backend(config["llm"]))
+                                 create_backend(muse or config["llm"]))
             return run(
                 body.message, body.history, TOOLS, call_tool, ollama_host, model,
                 # Never below 16K: the tool list alone fills most of Ollama's 4K default.
