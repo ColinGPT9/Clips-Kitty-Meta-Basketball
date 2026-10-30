@@ -153,7 +153,7 @@ def _approve(db, review: dict, command: dict, now) -> Outcome:
                decision=decision)
     queued = queue_publishes(db, review, decision)
     if not queued:
-        why = "Every chosen clip is already uploading, or already posted where you chose."
+        why = "Every chosen clip is already posted, or on its way, where you chose."
         store.move(db, review["id"], states.FAILED, actor="desktop", detail="nothing could be queued", error=why)
         return Outcome("rejected", why)
     store.move(db, review["id"], states.PUBLISH_QUEUED, actor="desktop", detail=f"{queued} upload(s) queued")
@@ -165,15 +165,19 @@ def queue_publishes(db, review: dict, decision: dict, *, only: dict | None = Non
     publish_jobs queue as every upload, so its crash rule holds: an upload a
     restart cut off is marked interrupted and never sent twice.
 
-    `only` ({clip_id: [platforms]}) narrows a local retry to what failed.
+    `only` ({clip_id: [platforms]}) narrows a local retry to what failed: a
+    clip it does not name is not sent again (an upload a restart cut off is
+    one, and it may already be up).
 
-    Never a second post: a platform the clip is already published on, by any
-    provider and at any time up to now, is left out of its job."""
+    Never a second post: a platform the clip is already published on, or on
+    its way to (scheduled elsewhere, or uploading), by any provider, is left
+    out of its job (store.sent_platforms)."""
     offered = {c["clip_id"]: c for c in review["clips"]}
     queued = 0
     for clip_id in decision["clips"]:
-        done = store.published_platforms(db, clip_id)
-        platforms = [p for p in (only or {}).get(clip_id, decision["platforms"]) if p not in done]
+        wanted = decision["platforms"] if only is None else only.get(clip_id, [])
+        done = store.sent_platforms(db, clip_id)
+        platforms = [p for p in wanted if p not in done]
         if not platforms or clip_id not in offered:
             continue
         if db.active_publish_job_for_clip(clip_id) is not None:

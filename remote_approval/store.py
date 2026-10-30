@@ -142,14 +142,48 @@ def update_review(db, review_id: int, **fields) -> None:
     db.conn.commit()
 
 
-def published_platforms(db, clip_id: int) -> set[str]:
-    """Where this clip is already published, by any provider: clip_publishes
-    is the table every publisher writes, so a clip WoopSocial or an earlier
-    offer already posted to Instagram is never posted there a second time."""
-    rows = db.conn.execute(
-        "SELECT platform FROM clip_publishes WHERE clip_id = ? AND state = 'published'", (int(clip_id),)
+#: A post that is up, or on its way there: WoopSocial keeps a post it has
+#: scheduled as queued until it is due, and an upload is sending or
+#: processing. The states WoopSocial's own guard counts
+#: (server/woopsocial_service.py ALIVE): a post on its way goes up all the
+#: same, so sending the clip there again would post it twice.
+SENT = ("queued", "sending", "processing", "published")
+
+
+def clip_posts(db, clip_id: int) -> list:
+    """Every clip_publishes row of this clip, by any provider: the table
+    every publisher writes. Matched on the clip's lasting identity (its video
+    and window) as well as its id, as WoopSocial's guard is: a clip deleted
+    and made again has a new id, and the posts it had keep the old one."""
+    clip = db.get_clip(int(clip_id))
+    if clip is None:
+        return db.clip_publishes(int(clip_id))
+    return db.conn.execute(
+        "SELECT * FROM clip_publishes WHERE clip_id = ? "
+        "OR (video_id != '' AND video_id = ? AND start_s = ? AND end_s = ?)",
+        (int(clip_id), clip["video_id"] or "", clip["start_s"], clip["end_s"]),
     ).fetchall()
-    return {r["platform"] for r in rows}
+
+
+def published_platforms(db, clip_id: int) -> set[str]:
+    """Where this clip is already published, by any provider (clip_posts):
+    what an offer tells the phone about it."""
+    return {r["platform"] for r in clip_posts(db, clip_id) if r["state"] == "published"}
+
+
+def sent_platforms(db, clip_id: int, *, but_not: str = "") -> dict[str, str]:
+    """Where this clip is published or on its way (SENT), by any provider,
+    as {platform: state}, "published" when it is both. A clip WoopSocial has
+    scheduled for Instagram, or an earlier offer already posted there, is
+    never sent there a second time. `but_not` leaves out one approval's own
+    Meta posts, so its results can tell them from what was there before."""
+    out: dict[str, str] = {}
+    for r in clip_posts(db, clip_id):
+        if r["state"] not in SENT or (but_not and r["provider"] == "meta" and r["request_id"] == but_not):
+            continue
+        if out.get(r["platform"]) != "published":
+            out[r["platform"]] = r["state"]
+    return out
 
 
 # ---- the outbox --------------------------------------------------------------

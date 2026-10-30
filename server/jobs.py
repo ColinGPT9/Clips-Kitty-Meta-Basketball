@@ -448,7 +448,8 @@ class Worker(threading.Thread):
             # that one's clips.
             with self._progress_lock:
                 started = (self._progress.get(job["id"]) or {}).get("started")
-            notifier.on_job_finished(db, job, status, started=started)
+            notifier.on_job_finished(db, job, status, started=started,
+                                     data_dir=Path(self.config["paths"]["data_dir"]))
         except Exception as e:
             print(f"  Could not queue the WhatsApp notification: {e}")
 

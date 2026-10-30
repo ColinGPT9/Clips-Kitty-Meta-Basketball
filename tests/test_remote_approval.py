@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 import pytest
 from remote_approval_fake import SECRET, FakeRelay, finished_job, sign_command
 
-from remote_approval import commands, notifier, service, states, store, summary
+from remote_approval import captions, commands, notifier, service, states, store, summary
 from remote_approval import settings as ra_settings
 from remote_approval.relay import RelayError
 
@@ -131,15 +131,31 @@ def test_highlights_with_nothing_more_to_say_read_as_highlights():
     assert summary.build("", [], [], kind="video")["title"] == "your video"
 
 
-def test_which_kind_of_video_a_job_is():
-    plugin = {"scores": json.dumps({"plugin": "someone/some-pipeline"}), "render_opts": "{}"}
+def _pipeline(data_dir, plugin_source, install_plugin, plugin_id, category):
+    """Install a plugin pipeline in `data_dir`, as the plugin manager would."""
+    manifest = plugin_source.manifest(id=plugin_id, category=category)
+    install_plugin(data_dir, plugin_source.folder(plugin_id.replace("/", "_"), manifest))
+
+
+def test_which_kind_of_video_a_job_is(tmp_path, plugin_source, install_plugin):
+    _pipeline(tmp_path, plugin_source, install_plugin, "someone/some-pipeline", "gaming")
+    _pipeline(tmp_path, plugin_source, install_plugin, "someone/scene-cuts", "utilities")
+    game = {"scores": json.dumps({"plugin": "someone/some-pipeline"}), "render_opts": "{}"}
+    cuts = {"scores": json.dumps({"plugin": "someone/scene-cuts"}), "render_opts": "{}"}
     plain = {"scores": "{}", "render_opts": "{}"}
     assert summary.kind_of({"sport": {"name": "basketball"}}, []) == "basketball"
     assert summary.kind_of({"sport": {"name": "soccer"}}, [plain]) == "video"
-    for payload in ({"gaming": True}, {"gaming_scoring": True}, {"pipeline": {"id": "someone/some-pipeline"}}):
+    for payload in ({"gaming": True}, {"gaming_scoring": True}):
         assert summary.kind_of(payload, [plain]) == "gaming"
-    assert summary.kind_of({}, [plain, plugin]) == "gaming"
     assert summary.kind_of({}, [plain]) == "video"
+    # A pipeline is a game's own only when its category says so, as the
+    # pipeline itself decides (plugins/gaming.py). Any other finds moments in
+    # any video, and one that can't be looked up is not called gaming.
+    assert summary.kind_of({"pipeline": {"id": "someone/some-pipeline"}}, [plain], tmp_path) == "gaming"
+    assert summary.kind_of({}, [plain, game], tmp_path) == "gaming"
+    assert summary.kind_of({"pipeline": {"id": "someone/scene-cuts"}}, [cuts], tmp_path) == "video"
+    assert summary.kind_of({"pipeline": "someone/not-installed"}, [plain], tmp_path) == "video"
+    assert summary.kind_of({"pipeline": {"id": "someone/some-pipeline"}}, [game]) == "video"
 
 
 def test_the_snapshot_pins_each_file_and_the_fingerprint_follows_it(db, tmp_path):
@@ -388,7 +404,8 @@ def test_longform_cuts_and_story_reels_are_never_offered(db, on):
     assert summary.ready_text(review["summary"]) == "1 clip: 1 dunk"  # not "best 1 of 4"
 
 
-def test_gaming_and_other_videos_wait_for_the_creator_to_opt_in(db, on):
+def test_gaming_and_other_videos_wait_for_the_creator_to_opt_in(db, on, plugin_source, install_plugin):
+    _pipeline(on, plugin_source, install_plugin, "someone/some-pipeline", "gaming")
     folder, now = on / "clips", time.time()
     pipeline = {"plugin": "someone/some-pipeline"}
     gaming = _job(db, "vid_stream", {**PLAIN, "pipeline": {"id": "someone/some-pipeline"}}, started=now - 60)
@@ -399,18 +416,36 @@ def test_gaming_and_other_videos_wait_for_the_creator_to_opt_in(db, on):
     for job_id in (gaming, plain):
         db.finish_job(job_id, "done")
     assert ra_settings.load(db)["basketball_only"] is True  # as it ships
-    assert _offer(db, gaming) is None and _offer(db, plain) is None
+    assert _offer(db, gaming, data_dir=on) is None and _offer(db, plain, data_dir=on) is None
     assert store.pending_outbox(db) == 0
 
     ra_settings.save(db, {"basketball_only": False})  # Settings: "Offer gaming and other videos too"
-    review = _offer(db, gaming)
+    review = _offer(db, gaming, data_dir=on)
     assert review["summary"]["kind"] == "gaming"
     assert summary.ready_text(review["summary"]) == "2 clips: 1 chase and 1 highlight"
     assert [c["label"] for c in review["clips"]] == ["Chase", "Funny dialogue"]
-    vlog = _offer(db, plain)
+    vlog = _offer(db, plain, data_dir=on)
     assert vlog["summary"]["kind"] == "video"
     assert summary.ready_text(vlog["summary"]) == "1 highlight"
     assert store.pending_outbox(db) == 2
+
+
+def test_a_pipeline_that_is_not_a_games_own_offers_a_video_in_plain_words(db, on, plugin_source, install_plugin):
+    """A pipeline that finds moments in any video (its category is not
+    gaming) says nothing about what the video is: never tagged #gaming."""
+    _pipeline(on, plugin_source, install_plugin, "someone/scene-cuts", "utilities")
+    ra_settings.save(db, {"basketball_only": False})
+    folder, now = on / "clips", time.time()
+    job = _job(db, "vid_vlog", {**PLAIN, "pipeline": {"id": "someone/scene-cuts"}}, started=now - 60)
+    _clip(db, folder, "vid_vlog", 10.0, 30.0, made=now, scores={"plugin": "someone/scene-cuts", "plugin_label": "loud"})
+    db.finish_job(job, "done")
+    review = _offer(db, job, data_dir=on)
+    assert review["summary"]["kind"] == "video"
+    assert summary.ready_text(review["summary"]) == "1 highlight"
+    assert review["clips"][0]["label"] == "Loud"  # the pipeline's own word for it, on the card
+    entry = review["clips"][0]
+    made = captions.texts_for(review, db.get_clip(entry["clip_id"]), entry)
+    assert "gaming" not in json.dumps(made).lower()
 
 
 def test_a_relay_that_is_down_is_retried_later_and_a_refusal_is_not(db, on):
@@ -696,6 +731,93 @@ def test_an_approval_with_nothing_left_to_post_is_refused(db, on):
     assert out.outcome == "rejected" and "already posted" in out.reason
     assert commands.jobs_for_review(db, review["id"]) == []
     assert store.get_review(db, review["id"])["state"] == states.FAILED
+
+
+def test_an_approval_never_posts_where_a_post_is_on_its_way(db, on):
+    """WoopSocial keeps a post it has scheduled as queued until it is due,
+    and an upload from another publisher is processing: both go up all the
+    same, so the phone's approval leaves those platforms out."""
+    review, _ = offered(db, on)
+    first, second = (c["clip_id"] for c in review["clips"][:2])
+    db.record_clip_publish(first, "instagram", {"provider": "woopsocial", "state": "queued",
+                                                "scheduled_for": "2099-01-01T12:00:00Z"})
+    db.record_clip_publish(second, "facebook", {"provider": "uploadpost", "state": "processing"})
+    out = commands.handle(db, approve_command(review, clips=[first, second], platforms=["instagram", "facebook"]),
+                          secret=SECRET)
+    assert out.outcome == "accepted" and out.queued == 2
+    jobs = {j["clip_id"]: json.loads(j["request"])["platforms"] for j in commands.jobs_for_review(db, review["id"])}
+    assert jobs == {first: ["facebook"], second: ["instagram"]}
+    _finish(db, review, {"instagram": ("published", "https://www.instagram.com/reel/A/"),
+                         "facebook": ("published", "https://www.facebook.com/reel/1")})
+    service.settle_publishing(db, ra_settings.load(db))
+    review = store.get_review(db, review["id"])
+    assert review["state"] == states.PUBLISHED
+    posts = {(c["clip_id"], p["platform"]): p for c in review["results"]["clips"] for p in c["posts"]}
+    assert posts[(first, "instagram")] == {"platform": "instagram", "state": "skipped", "url": "",
+                                           "error": "Already on its way there, so it was not posted again."}
+    assert posts[(second, "facebook")]["state"] == "skipped"
+    assert service.result_text(review["results"]) == "2 of 4 posts published (2 skipped)"
+
+
+def test_a_clip_on_its_way_everywhere_is_not_offered_and_only_what_is_up_is_called_posted(db, on):
+    job = finished_job(db, on)
+    best = [c["id"] for c in db.clips_for_video(job["video_id"])]  # best first
+    for platform in ra_settings.PLATFORMS:
+        db.record_clip_publish(best[0], platform, {"provider": "woopsocial", "state": "queued"})
+    db.record_clip_publish(best[1], "instagram", {"provider": "woopsocial", "state": "queued"})
+    review = store.get_review(db, notifier.on_job_finished(db, job, "done"))
+    entries = {c["clip_id"]: c for c in review["clips"]}
+    assert best[0] not in entries
+    assert "published" not in entries[best[1]]  # the page says "Already posted" only of what is up
+
+
+def test_a_clip_made_again_under_a_new_id_keeps_where_it_was_posted(db, on):
+    """Deleted after it was posted, then made again by a re-run: a new row
+    for the same window. Its posts still count, matched on the clip's video
+    and window as WoopSocial's guard matches them."""
+    job = finished_job(db, on)
+    old = db.clips_for_video(job["video_id"])[0]
+    db.record_clip_publish(int(old["id"]), "instagram", {
+        "provider": "woopsocial", "state": "published",
+        "video_id": old["video_id"], "start_s": old["start_s"], "end_s": old["end_s"]})
+    db.delete_clip(int(old["id"]))
+    new = db.add_clip(old["video_id"], old["start_s"], old["end_s"], old["score"], old["hook"], path=old["path"],
+                      title=old["title"], scores=old["scores"], render_opts=old["render_opts"])
+    assert new != old["id"]
+    review_id = notifier.on_job_finished(db, job, "done")
+    service.flush_outbox(db, on, FakeRelay())
+    review = store.get_review(db, review_id)
+    assert next(c for c in review["clips"] if c["clip_id"] == new)["published"] == ["instagram"]
+    commands.handle(db, approve_command(review, clips=[new], platforms=["instagram", "facebook"]), secret=SECRET)
+    assert [json.loads(j["request"])["platforms"] for j in commands.jobs_for_review(db, review["id"])] == [["facebook"]]
+
+
+def test_a_retry_sends_again_only_what_failed(db, on):
+    """Never an upload a restart cut off: it may be up already."""
+    review, _ = offered(db, on)
+    cut, refused = (c["clip_id"] for c in review["clips"][:2])
+    commands.handle(db, approve_command(review, clips=[cut, refused], platforms=["instagram"]), secret=SECRET)
+    for job in commands.jobs_for_review(db, review["id"]):
+        state, status = ("processing", "interrupted") if job["clip_id"] == cut else ("failed", "failed")
+        db.record_clip_publish(job["clip_id"], "instagram", {"provider": "meta", "state": state, "error": "Refused.",
+                                                             "request_id": review["approval_id"]})
+        db.conn.execute("UPDATE publish_jobs SET status = ? WHERE id = ?", (status, job["id"]))
+    db.conn.commit()
+    service.settle_publishing(db, ra_settings.load(db))
+    review = store.get_review(db, review["id"])
+    assert service.result_text(review["results"]) == "0 of 2 posts published (1 failed, 1 not confirmed yet)"
+    assert service.retry_failed(db, review["id"]) == 1
+    again = [j for j in commands.jobs_for_review(db, review["id"]) if j["status"] == "queued"]
+    assert [(j["clip_id"], json.loads(j["request"])["platforms"]) for j in again] == [(refused, ["instagram"])]
+
+
+def test_a_local_retry_sends_only_the_clips_it_names(db, on):
+    review, _ = offered(db, on)
+    first, second = (c["clip_id"] for c in review["clips"][:2])
+    decision = {"command_id": "cmd_" + "b" * 24, "clips": [first, second], "platforms": ["instagram", "facebook"]}
+    assert commands.queue_publishes(db, review, decision, only={first: ["facebook"]}) == 1
+    jobs = [(j["clip_id"], json.loads(j["request"])["platforms"]) for j in commands.jobs_for_review(db, review["id"])]
+    assert jobs == [(first, ["facebook"])]
 
 
 def test_offers_expire_on_their_own(db, on):

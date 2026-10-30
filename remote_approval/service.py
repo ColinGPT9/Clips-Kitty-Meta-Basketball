@@ -148,29 +148,31 @@ def settle_publishing(db, config: dict) -> int:
 
 def results_for(db, review: dict, jobs) -> dict:
     """Per clip and platform, as the APIs confirmed: published (with the
-    link the API returned), failed (with why), or unconfirmed (processing,
-    or cut off by a restart: the creator is told to check)."""
+    link the API returned), failed (with why), unconfirmed (processing, or
+    cut off by a restart: the creator is told to check), or skipped (already
+    posted there, or on its way, so it was not sent again)."""
     clips_out = []
     totals = {"published": 0, "failed": 0, "unconfirmed": 0, "skipped": 0}
     by_clip = {j["clip_id"]: j for j in jobs}
     platforms = review["decision"].get("platforms") or []
     for clip_id in review["decision"].get("clips") or []:
         job = by_clip.get(clip_id)
-        every = {r["platform"]: r for r in db.clip_publishes(clip_id)}
-        rows = {p: r for p, r in every.items() if r["provider"] == "meta"}
+        rows = {r["platform"]: r for r in db.clip_publishes(clip_id) if r["provider"] == "meta"}
+        # Posted there, or on its way, by something other than this approval
+        # (an earlier offer, or another publisher): commands.queue_publishes
+        # left those platforms out.
+        before = store.sent_platforms(db, clip_id, but_not=review["approval_id"])
         entry = next((c for c in review["clips"] if c["clip_id"] == clip_id), {})
         posts = []
         for platform in platforms:
-            before = every.get(platform)
-            if before is not None and before["state"] == "published" and not (
-                    before["provider"] == "meta" and before["request_id"] == review["approval_id"]):
-                # Already posted there before this approval (an earlier offer,
-                # or another publisher): commands.queue_publishes left it out.
+            row = rows.get(platform)
+            if platform in before and not (row is not None and row["request_id"] == review["approval_id"]):
                 totals["skipped"] += 1
                 posts.append({"platform": platform, "state": "skipped", "url": "",
-                              "error": "Already posted there, so it was not posted again."})
+                              "error": "Already posted there, so it was not posted again."
+                              if before[platform] == "published"
+                              else "Already on its way there, so it was not posted again."})
                 continue
-            row = rows.get(platform)
             state = row["state"] if row else "failed"
             error = row["error"] if row else (job["error"] if job else "") or "Not posted."
             if job is not None and job["status"] == "interrupted" and state == "processing":

@@ -32,14 +32,16 @@ from remote_approval import states, store, summary
 STAMP_SLACK = 0.05
 
 
-def on_job_finished(db, job, status: str, *, started: float | None = None) -> int | None:
+def on_job_finished(db, job, status: str, *, started: float | None = None, data_dir=None) -> int | None:
     """Queue what this finished job should tell the creator. Returns the new
     offer's id, or None when nothing was offered (switched off, a video the
     settings leave out, nothing found, or a failure notice instead).
 
     `started` is when the worker began the job (time.time()), when it knows:
     finer than the row's started_at, so a run straight after another never
-    takes that one's clips (clips_of_run)."""
+    takes that one's clips (clips_of_run). `data_dir` is the app's data
+    folder, where an installed plugin says whether it is a game's own
+    pipeline (summary.kind_of)."""
     config = ra_settings.load(db)
     if not config["whatsapp_enabled"] or job["type"] != "process":
         return None
@@ -51,7 +53,7 @@ def on_job_finished(db, job, status: str, *, started: float | None = None) -> in
     row = db.get_job(job["id"])
     video_id = (row["video_id"] if row else "") or ""
     clips = clips_of_run(db, video_id, row or job, started=started)
-    kind = summary.kind_of(payload, clips)
+    kind = summary.kind_of(payload, clips, data_dir)
     # Basketball only, unless the creator opted in to gaming and other videos.
     if config["basketball_only"] and kind != "basketball":
         return None
@@ -138,15 +140,18 @@ def offer(db, *, job_id: int, video_id: str, title: str, clips, config: dict | N
 
     Also what "Ask again" in Settings calls after an offer expired: a new
     offer with a new link, never the old link brought back. A clip already
-    published everywhere an offer can send it is left out; one published to
-    some of those places is offered with a note of where (summary.snapshot)."""
+    posted, or on its way, everywhere an offer can send it is left out; one
+    published to some of those places is offered with a note of where
+    (summary.snapshot), and is never sent there again (commands.queue_publishes)."""
     config = config or ra_settings.load(db)
     clips = list(clips)
     posted = published_on(db, clips)
-    clips = [c for c in clips if len(posted.get(int(c["id"]), ())) < len(ra_settings.PLATFORMS)]
+    every = set(ra_settings.PLATFORMS)
+    clips = [c for c in clips if not every <= set(store.sent_platforms(db, int(c["id"])))]
     snap = summary.snapshot(clips, limit=int(config["max_clips"]), kind=kind, published=posted)
     if not snap:
-        store.audit(db, 0, "desktop", "nothing_to_offer", f"job {job_id}: no finished clips on disk")
+        store.audit(db, 0, "desktop", "nothing_to_offer",
+                    f"job {job_id}: no clips left to offer (none on disk, or all posted already)")
         return None
     info = summary.build(title, clips, snap, kind=kind)
     expires = store.now_utc() + timedelta(hours=int(config["approval_hours"]))

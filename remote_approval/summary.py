@@ -13,8 +13,8 @@ An offer is one of three kinds (kind_of), and each counts in its own words:
   (sports/core/clips.py mark), counted in the Sports toggle's own highlight
   choices (config/sports.yaml, basketball highlights_choices), so "dunks"
   here means exactly what "Dunks" means in the Generate bar;
-* gaming: a plugin pipeline's clip carries the label the pipeline gave it
-  (plugins/runner.py, scores.plugin_label), counted in PLUGIN_LABELS;
+* gaming: a game's own pipeline's clip carries the label the pipeline gave
+  it (plugins/runner.py, scores.plugin_label), counted in PLUGIN_LABELS;
 * any other video: its clips are highlights, and are counted as that.
 
 Each clip counts once, in the first category it belongs to, so the counts
@@ -156,18 +156,41 @@ def is_basketball(job_payload: dict, clips) -> bool:
     return False
 
 
-def kind_of(job_payload: dict, clips) -> str:
+def kind_of(job_payload: dict, clips, data_dir=None) -> str:
     """"basketball", "gaming" or "video": the words an offer of this job's
-    clips is written in. Gaming is a job sent as Gaming / Reaction, with
-    gaming scoring or a plugin pipeline, or one whose clips a plugin found;
-    anything that is neither basketball nor gaming is a video."""
+    clips is written in. Gaming is a job sent as Gaming / Reaction or with
+    gaming scoring, or one a game's own pipeline found: a plugin installed in
+    `data_dir` whose category is gaming, as the pipeline itself tells them
+    apart (plugins/gaming.py is_detector). Any other pipeline finds moments
+    in any kind of video, so its clips are a video's, as is anything that is
+    neither basketball nor gaming."""
     if is_basketball(job_payload, clips):
         return "basketball"
-    if any(job_payload.get(key) for key in ("gaming", "gaming_scoring", "pipeline")):
+    if job_payload.get("gaming") or job_payload.get("gaming_scoring"):
         return "gaming"
-    if any(scores_of(clip).get("plugin") for clip in clips):
+    found = sorted(_plugins_of(job_payload, clips)) if data_dir is not None else []
+    if any(_game_pipeline(pid, data_dir) for pid in found):
         return "gaming"
     return "video"
+
+
+def _plugins_of(job_payload: dict, clips) -> set[str]:
+    """The plugin pipelines a job named or its clips were found by."""
+    choice = job_payload.get("pipeline")
+    found = {str((choice.get("id") if isinstance(choice, dict) else choice) or "")}
+    found |= {str(scores_of(clip).get("plugin") or "") for clip in clips}
+    return found - {""}
+
+
+def _game_pipeline(plugin_id: str, data_dir) -> bool:
+    """A game's own pipeline: installed here with the gaming category. One
+    that can't be read is not, so nothing is called gaming on a guess."""
+    try:
+        from plugins import gaming
+
+        return bool(gaming.is_detector(plugin_id, data_dir))
+    except Exception:
+        return False
 
 
 def offerable(clip) -> bool:

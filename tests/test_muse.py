@@ -270,10 +270,13 @@ def test_each_platform_gets_muse_text_and_the_clip_text_is_the_fallback(db, tmp_
 
 
 @pytest.fixture
-def gaming_offer(db, tmp_path):
-    """A gaming stream a plugin pipeline clipped, offered once the creator
-    opted in to gaming and other videos."""
+def gaming_offer(db, tmp_path, plugin_source, install_plugin):
+    """A gaming stream a game's own pipeline clipped (an installed plugin
+    whose category is gaming), offered once the creator opted in to gaming
+    and other videos."""
     keys.save_key(tmp_path, "meta", KEY)
+    install_plugin(tmp_path, plugin_source.folder("pipeline", plugin_source.manifest(
+        id="someone/some-pipeline", category="gaming")))
     ra_settings.save(db, {"whatsapp_enabled": True, "basketball_only": False})
     db.upsert_video("vid_stream", title="Weekend stream")
     payload = {"url": "https://example.com/stream.mp4", "pipeline": {"id": "someone/some-pipeline"}}
@@ -287,7 +290,7 @@ def gaming_offer(db, tmp_path):
                     hashtags=json.dumps(["#gta6", "#gtarp"]),
                     scores=json.dumps({"plugin": "someone/some-pipeline", "plugin_label": label}))
     db.finish_job(job_id, "done")
-    review = store.get_review(db, notifier.on_job_finished(db, db.get_job(job_id), "done"))
+    review = store.get_review(db, notifier.on_job_finished(db, db.get_job(job_id), "done", data_dir=tmp_path))
     rows = {c["clip_id"]: db.get_clip(c["clip_id"]) for c in review["clips"]}
     return review, rows
 
