@@ -214,6 +214,78 @@ def test_a_file_ffprobe_cannot_read_yet_is_looked_at_again(tmp_path, clock):
     assert found.state == "not_yet" and found.reason == "Couldn't read the file yet: moov atom not found"
 
 
+def recorded(calls: list):
+    """probe(), remembering each file it was asked about."""
+    answer = probe()
+
+    def ask(path):
+        calls.append(path)
+        return answer(path)
+    return ask
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="a file open for writing is Windows' own answer")
+def test_a_file_still_open_in_the_program_copying_it_in_is_waited_for_unread(tmp_path, clock):
+    """A paused copy has its full size and an unchanging time, so it settles.
+    The program copying it still has it open to write, and that is what says
+    it hasn't arrived."""
+    probed = []
+    feed = FolderFeed(clock=clock, probe=recorded(probed))
+    path = write(tmp_path, "game.mp4")
+    video = feed.look(str(tmp_path))[0][0]
+    with open(path, "ab"):
+        found = feed.readiness(video.url, 0, video_id=video.video_id)
+        assert (found.state, found.reason) == ("not_yet", folder_feed.STILL_COPYING)
+    assert probed == []
+    with open(path, "rb"):  # only reading it, as a player does, is no copy
+        assert feed.readiness(video.url, 0, video_id=video.video_id).state == "ready"
+    assert probed == [path.resolve()]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the online-only mark is Windows' own")
+def test_a_file_only_online_is_waited_for_and_never_read(tmp_path, clock):
+    """Reading a OneDrive or Dropbox file that is only online has the sync app
+    download all of it first, with the watcher waiting. It waits for the sync
+    app instead. FILE_ATTRIBUTE_OFFLINE stands in for the marks only a sync
+    app can set."""
+    import ctypes
+
+    probed = []
+    feed = FolderFeed(clock=clock, probe=recorded(probed))
+    path = write(tmp_path, "game.mp4")
+    video = feed.look(str(tmp_path))[0][0]
+    assert ctypes.windll.kernel32.SetFileAttributesW(str(path), 0x1000)  # FILE_ATTRIBUTE_OFFLINE
+    try:
+        found = feed.readiness(video.url, 0, video_id=video.video_id)
+        assert (found.state, found.reason) == ("not_yet", folder_feed.ONLINE_ONLY)
+        assert probed == []
+    finally:
+        ctypes.windll.kernel32.SetFileAttributesW(str(path), 0x80)  # FILE_ATTRIBUTE_NORMAL
+    # Downloaded since, as the same file: ready, under the id it was found by.
+    assert feed.readiness(video.url, 0, video_id=video.video_id).state == "ready"
+
+
+def test_what_ffprobe_says_never_carries_the_files_path(tmp_path, clock, monkeypatch):
+    """ffprobe names a file it can't read by its full path, and a timeout's
+    own message is the whole command line. The Watch page shows the reason,
+    and a path names whoever's PC it is on."""
+    write(tmp_path, "game.mp4")
+    feed = FolderFeed(clock=clock)  # the real probe, with ffprobe stood in for
+    video = feed.look(str(tmp_path))[0][0]
+
+    def unreadable(command, **kwargs):
+        return subprocess.CompletedProcess(command, 1, "", f"{command[-1]}: Invalid data found when processing input\n")
+    monkeypatch.setattr(folder_feed.subprocess, "run", unreadable)
+    found = feed.readiness(video.url, 0, video_id=video.video_id)
+    assert found.reason == "Couldn't read the file yet: game.mp4: Invalid data found when processing input"
+
+    def too_slow(command, **kwargs):
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+    monkeypatch.setattr(folder_feed.subprocess, "run", too_slow)
+    found = feed.readiness(video.url, 0, video_id=video.video_id)
+    assert (found.state, found.reason) == ("not_yet", "Couldn't read the file yet: reading it took more than two minutes")
+
+
 def test_a_file_changed_or_gone_since_it_was_found_is_passed_over(tmp_path, feed):
     path = write(tmp_path, "game.mp4", b"take one")
     video = feed.look(str(tmp_path))[0][0]

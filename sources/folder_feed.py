@@ -15,7 +15,13 @@ What a folder needs that a channel doesn't:
     still running, changes its size or time from one look to the next. A file
     is reported once both have stayed the same since a look at least
     SETTLE_SECONDS earlier. That is remembered in memory, so a restart costs
-    one extra look, never a half-copied video.
+    one extra look, never a half-copied video. A copy paused for longer than
+    that keeps both still (Windows sets the full size before it copies a
+    byte), so before a file is clipped Windows is also asked whether another
+    program still has it open to write to it.
+  * Only files on this PC. A Files On-Demand file that is only online
+    (OneDrive, Dropbox) is waited for, never read: reading one has the sync
+    app download all of it first, which would hold up the watcher.
   * Only the folder itself: no subfolders, and nothing hidden, temporary or
     half downloaded (~$name, *.tmp, *.part, *.crdownload, desktop.ini).
   * Only this PC's own disk. A network path is refused, as core/paths
@@ -26,10 +32,12 @@ Imports neither sources.dispatch nor yt_dlp, so its tests run in CI's light
 job. ffprobe is the one program it runs, and only to ask about a file.
 """
 
+import functools
 import json
 import os
 import stat
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -51,9 +59,18 @@ _SYSTEM = ("desktop.ini", "thumbs.db")
 # Windows' own marks for a file nobody is meant to see or keep.
 _HIDDEN = (getattr(stat, "FILE_ATTRIBUTE_HIDDEN", 0x2) | getattr(stat, "FILE_ATTRIBUTE_SYSTEM", 0x4)
            | getattr(stat, "FILE_ATTRIBUTE_TEMPORARY", 0x100))
+# Windows' marks for a file whose video is still only online: a OneDrive or
+# Dropbox Files On-Demand file. The two RECALL marks are not in the stat
+# module, so they are spelled out.
+_ONLINE_ONLY = (getattr(stat, "FILE_ATTRIBUTE_OFFLINE", 0x1000)
+                | 0x40000     # FILE_ATTRIBUTE_RECALL_ON_OPEN
+                | 0x400000)   # FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
 
 GONE = "The file isn't in the folder any more."
 CHANGED = "The file changed after it was found. The changed file counts as a new video."
+ONLINE_ONLY = ("The file is only online so far. Make the folder available offline "
+               "(in OneDrive, Always keep on this device).")
+STILL_COPYING = "The file is still being copied into the folder."
 
 
 def skipped_name(name: str) -> bool:
@@ -156,9 +173,10 @@ class FolderFeed:
     def readiness(self, url: str, min_seconds: float = 0, *, video_id: str = "") -> Readiness:
         """Whether a file found in a watched folder can be clipped now, later,
         or not at all, from ffprobe: a video stream in it, long enough, and
-        which way up it is shown. `video_id` is the id it was found under; a
-        file that changed since is passed over, as its new version is found
-        on its own."""
+        which way up it is shown. A file only online, or still open in the
+        program copying it in, is looked at again later, unread. `video_id` is
+        the id it was found under; a file that changed since is passed over,
+        as its new version is found on its own."""
         picked = picked_file(url, local_file.VIDEO_SUFFIXES)
         if picked is None:
             if picked_folder(os.path.dirname(url)) is None:
@@ -170,6 +188,13 @@ class FolderFeed:
         facts = {"title": path.stem, "published_at": float(st.st_mtime)}
         if video_id and local_file.video_id(path, st) != video_id:
             return Readiness("skip", CHANGED, **facts)
+        if getattr(st, "st_file_attributes", 0) & _ONLINE_ONLY:
+            # Never read: the sync app would download all of it first, with
+            # the watcher waiting on ffprobe. Once the sync app has it here,
+            # the next look finds it ready.
+            return Readiness("not_yet", ONLINE_ONLY, **facts)
+        if _being_written(path):
+            return Readiness("not_yet", STILL_COPYING, **facts)
         try:
             found = self._probe(path)
         except Exception as e:
@@ -214,14 +239,21 @@ def _probe(path: Path) -> dict:
     from one ffprobe. Raises when ffprobe can't read the file at all."""
     from core.binaries import ffprobe
 
-    out = subprocess.run(
-        [ffprobe(), "-v", "error", "-select_streams", "v:0",
-         "-show_entries", "stream=codec_name,width,height:stream_side_data=rotation:format=duration",
-         "-of", "json", str(path)],
-        capture_output=True, text=True, timeout=120,
-    )
+    try:
+        out = subprocess.run(
+            [ffprobe(), "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=codec_name,width,height:stream_side_data=rotation:format=duration",
+             "-of", "json", str(path)],
+            capture_output=True, text=True, timeout=120,
+        )
+    except subprocess.TimeoutExpired as e:
+        # Its own message is the whole command line, the file's path in it.
+        raise RuntimeError("reading it took more than two minutes") from e
     if out.returncode != 0:
-        raise RuntimeError((out.stderr or "").strip() or "ffprobe couldn't read it")
+        # ffprobe names the file by its full path, which names whoever's PC it
+        # is on, and the Watch page shows this. The file's name says which one.
+        message = (out.stderr or "").strip().replace(str(path), path.name)
+        raise RuntimeError(message or "ffprobe couldn't read it")
     data = json.loads(out.stdout or "{}")
     streams = [s for s in data.get("streams") or [] if isinstance(s, dict)]
     video = streams[0] if streams else {}
@@ -241,6 +273,50 @@ def _probe(path: Path) -> dict:
         duration = 0.0
     return {"codec": str(video.get("codec_name") or ""), "width": width, "height": height,
             "duration": duration}
+
+
+# CreateFileW's numbers, for _being_written.
+_GENERIC_READ = 0x80000000
+_FILE_SHARE_READ = 0x1
+_FILE_SHARE_DELETE = 0x4
+_OPEN_EXISTING = 3
+_ERROR_SHARING_VIOLATION = 32
+
+
+def _being_written(path: Path) -> bool:
+    """Whether another program still has the file open to write to it: a
+    copy or a download still going, even one paused for longer than
+    SETTLE_SECONDS, whose size and time say nothing then. Windows refuses an
+    open that won't share writing while one does (a sharing violation), so
+    this asks for exactly that and closes the file at once, reading nothing.
+    False where Windows can't be asked."""
+    if sys.platform != "win32":
+        return False
+    import ctypes
+
+    kernel32 = _kernel32()
+    handle = kernel32.CreateFileW(str(path), _GENERIC_READ, _FILE_SHARE_READ | _FILE_SHARE_DELETE,
+                                  None, _OPEN_EXISTING, 0, None)
+    if handle is None or handle == ctypes.c_void_p(-1).value:  # INVALID_HANDLE_VALUE
+        return ctypes.get_last_error() == _ERROR_SHARING_VIOLATION
+    kernel32.CloseHandle(handle)
+    return False
+
+
+@functools.cache
+def _kernel32():
+    """kernel32 with CreateFileW typed, loaded once. Its own copy, so the
+    types set here never change what another part of the app gets from
+    ctypes.windll."""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CreateFileW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                                     wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    return kernel32
 
 
 def _short(error: Exception | str) -> str:

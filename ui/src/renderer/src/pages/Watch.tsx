@@ -356,7 +356,7 @@ export default function Watch({
         {folder && (
           <p className="text-xs text-muted">
             {t(
-              'A Google Drive for desktop, Dropbox or OneDrive folder. In Google Drive, use Mirror files or make the folder available offline. Files are only read, never moved or changed.'
+              'A Google Drive for desktop, Dropbox or OneDrive folder. Make the folder available offline (in OneDrive, Always keep on this device), so new videos download to this PC: a file that is only online waits until it does. Files are only read, never moved or changed.'
             )}
           </p>
         )}

@@ -93,8 +93,11 @@ class FakeImports:
 
     def __init__(self):
         self.calls: list[str] = []
+        self.error: Exception | None = None
 
     def __call__(self, src, st, downloads):
+        if self.error:
+            raise self.error
         self.calls.append(str(src))
         vid = local_file.video_id(src, st)
         downloads.mkdir(parents=True, exist_ok=True)
@@ -1638,6 +1641,21 @@ def test_check_now_looks_again_at_a_vod_whose_stream_just_ended(env):
     assert [j["video_id"] for j in env.jobs()] == ["tw_2882100152"]
 
 
+def test_check_now_never_queues_a_vod_that_is_still_live(env):
+    watch = env.add("somestreamer", platform="twitch")
+    env.watcher.tick()
+    url = "https://www.twitch.tv/videos/2882100153"
+    env.feed.ready[url] = Readiness("not_yet", "Still live or about to go live. Waiting for it to finish.")
+    env.feed.listings["somestreamer"] = [vod(2882100153)]
+    env.later()
+    asked = env.feed.readiness_calls.count(url)
+    env.client.post(f"/automation/watches/{watch['id']}/check")
+    env.later(5)
+    assert env.feed.readiness_calls.count(url) == asked + 1  # looked at again, as asked
+    assert env.item("tw_2882100153")["status"] == "waiting_for_video"
+    assert env.jobs() == []
+
+
 def test_check_now_leaves_other_watches_videos_to_their_own_time(env):
     first = env.add("somestreamer", platform="twitch")
     env.add("otherstreamer", platform="twitch")
@@ -1702,6 +1720,7 @@ def test_a_phone_watch_never_publishes_from_here(env):
     phone_on(env)
     with_publish_mode(env, "phone")
     clips_on_disk(env)
+    assert announced(env) is not None
     env.later(5)
     env.later(5)
     item = env.item("newnewnew01")
@@ -1724,6 +1743,44 @@ def test_a_phone_watch_says_so_when_nothing_could_reach_the_phone(env):
     assert item["publish_state"] == "phone" and item["publish_error"].startswith("Nothing was sent to your phone.")
     assert not any("Sent to your phone" in line for line in feed_lines(env))
     assert env.publish_calls == 0
+
+
+def test_a_phone_watch_never_says_clips_were_sent_when_no_offer_was_made(env):
+    """Settings allow an offer, but none was made: here every clip is posted
+    on Instagram, Facebook and Threads already, so there is nothing to offer."""
+    phone_on(env)
+    with_publish_mode(env, "phone")
+    clips_on_disk(env)
+
+    def posted_everywhere(d):
+        for clip in d.clips_for_video("newnewnew01"):
+            for platform in ra_settings.PLATFORMS:
+                d.record_clip_publish(clip["id"], platform, {
+                    "provider": "woopsocial", "video_id": "newnewnew01", "start_s": clip["start_s"],
+                    "end_s": clip["end_s"], "state": "published"})
+    env.run(posted_everywhere)
+    assert announced(env) is None
+    env.later(5)
+    assert env.item("newnewnew01")["publish_state"] == ""  # its offer may still be on its way
+    env.later(automation.OFFER_WAIT_SECONDS)
+    item = env.item("newnewnew01")
+    assert (item["publish_state"], item["publish_error"]) == ("phone", "Nothing was sent to your phone for this video.")
+    assert not any("Sent to your phone" in line for line in feed_lines(env))
+    assert env.publish_calls == 0
+
+
+def test_a_phone_watch_says_what_was_sent_whatever_settings_say_now(env):
+    """The offer made when the job finished is what the phone got. WhatsApp
+    switched off since then doesn't unsend it."""
+    phone_on(env)
+    with_publish_mode(env, "phone")
+    clips_on_disk(env)
+    assert announced(env) is not None
+    env.run(lambda d: ra_settings.save(d, {"whatsapp_enabled": False}))
+    env.later(5)
+    item = env.item("newnewnew01")
+    assert (item["publish_state"], item["publish_error"]) == ("phone", "")
+    assert "Clips of “Video newnewnew01” are ready. Sent to your phone for approval." in feed_lines(env)
 
 
 @pytest.mark.parametrize("platforms, offered", [
@@ -1824,8 +1881,41 @@ def test_a_file_dropped_in_is_copied_in_once_and_queued_by_its_id(env, drive):
         env.later(automation.WATCH_TICK_SECONDS)
     assert len(env.jobs()) == 1 and len(env.imports.calls) == 1
     assert dropped.read_bytes() == b"the whole game"  # only ever read
-    found = next(e for e in activity(env)["events"] if e["kind"] == "found")
-    assert "url" not in found  # a path on this PC is never offered as a link
+    events = activity(env)["events"]
+    assert {"found", "queued"} <= {e["kind"] for e in events}
+    # A path on this PC is never offered as a link, on any line.
+    assert not any("url" in e for e in events)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="a file open for writing is Windows' own answer")
+def test_a_file_still_being_copied_in_waits_however_long_the_copy_is_paused(env, drive):
+    """A copy sets the file's full size first, and a paused one stops its
+    time too: size and time alone would call it finished."""
+    add_folder(env, drive)
+    env.watcher.tick()
+    dropped = drop(drive, "game.mp4")
+    with open(dropped, "ab"):  # the program copying it in still has it open
+        arrive(env)
+        env.later(automation.FOLDER_RECHECK_SECONDS)
+        item = env.item(id_of(dropped))
+        assert (item["status"], item["reason"]) == ("waiting_for_video", folder_feed.STILL_COPYING)
+        assert env.imports.calls == [] and env.jobs() == []
+    env.later(automation.FOLDER_RECHECK_SECONDS)
+    assert env.item(id_of(dropped))["status"] == "queued"
+    assert env.imports.calls == [str(dropped.resolve())]
+
+
+def test_a_copy_the_disk_refuses_is_said_on_the_video_and_the_watcher_carries_on(env, drive):
+    add_folder(env, drive)
+    env.watcher.tick()
+    dropped = drop(drive, "game.mp4")
+    env.imports.error = OSError(28, "There is not enough space on the disk", str(dropped))
+    arrive(env)  # raised out of the tick before, every tick, holding up every other watch
+    item = env.item(id_of(dropped))
+    assert (item["status"], item["reason"]) == (
+        "error", "Couldn't copy it into Clips Kitty: There is not enough space on the disk")
+    assert env.jobs() == []
+    assert not any(str(drive) in line for line in feed_lines(env))
 
 
 def test_a_file_already_added_by_hand_is_not_clipped_again(env, drive):

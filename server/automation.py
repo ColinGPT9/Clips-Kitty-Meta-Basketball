@@ -56,6 +56,11 @@ RECHECK_SECONDS = 15 * 60
 # this PC's own disk, so a minute is plenty; a channel's video waits on
 # someone else's platform.
 FOLDER_RECHECK_SECONDS = 60
+# How long a finished video of a phone watch waits for its offer before the
+# Watch page says nothing was sent. The worker makes the offer just after it
+# marks the job done (server/jobs.py _announce), after any webhook the job
+# carries has answered, so a look in between finds none yet.
+OFFER_WAIT_SECONDS = 2 * 60
 # A premiere can be scheduled days ahead; past a week it is not coming.
 GIVE_UP_SECONDS = 7 * 24 * 60 * 60
 # The "last 24 hours" catch-up policy.
@@ -86,6 +91,7 @@ _BASELINE = "Posted before you started watching this channel."
 _MISSED_FILE = "Added while Clips Kitty wasn't watching."
 _BASELINE_FILE = "In the folder before you started watching it."
 _SENT_TO_PHONE = "Sent to your phone for approval."
+_NOT_SENT = "Nothing was sent to your phone for this video."
 
 _JOB_STATES = {
     "queued": "queued",
@@ -184,19 +190,23 @@ def publish_settings(watch) -> PublishSettings:
         return PublishSettings()
 
 
-def phone_problem(d: StateDB) -> str:
+def phone_problem(d: StateDB, *, offered: bool = False) -> str:
     """Why a watch set to Ask me on my phone can't be approved from the phone,
-    named as Settings names its switches, or "" when it can. An offer is only
-    made with these on (remote_approval/notifier.py), so the Watch page never
-    says clips were sent when nothing was."""
+    named as Settings names its switches, or "" when it can. `offered` is
+    whether this video's clips really were offered when its job finished
+    (remote_approval/notifier.py): what was sent then is the truth, whatever
+    the switches say now, so the Watch page never says clips were sent when
+    nothing was, nor the other way round."""
     from remote_approval import settings as ra_settings
 
     s = ra_settings.load(d)
     where = "in Settings → Notifications & Remote Approval"
-    if not s["whatsapp_enabled"]:
-        return f"Nothing was sent to your phone. Set up WhatsApp and turn on Send me WhatsApp messages {where}."
-    if not s["notify_on_finish"]:
-        return f"Nothing was sent to your phone. Turn on When highlights are ready {where}."
+    if not offered:
+        if not s["whatsapp_enabled"]:
+            return f"Nothing was sent to your phone. Set up WhatsApp and turn on Send me WhatsApp messages {where}."
+        if not s["notify_on_finish"]:
+            return f"Nothing was sent to your phone. Turn on When highlights are ready {where}."
+        return ""
     if not s["remote_approvals"]:
         return ("Your phone was told, but can't approve yet. Turn on Let me approve publishing "
                 f"from my phone {where}.")
@@ -546,6 +556,9 @@ class ChannelWatcher(threading.Thread):
         self._arrived_unwatched: dict[int, set[str]] = {}
         # When each folder watch last said it found nothing new.
         self._quiet_said: dict[int, float] = {}
+        # Per finished video of a phone watch with no offer found yet, when
+        # that was first seen (_to_phone).
+        self._awaiting_offer: dict[int, float] = {}
         self._worker = worker
         self._broadcaster = broadcaster
         self._publisher = publisher
@@ -905,7 +918,9 @@ class ChannelWatcher(threading.Thread):
             # anything else they staged and have not started.
             queue.start_if_alone(d, job_id)
             d.set_watch_item(item["id"], state="queued", job_id=job_id, reason="")
-            self._say(f"Queued {_quoted(title)} for clipping", "queued", item["url"])
+            # A folder's file has no link: its url is its path on this PC.
+            self._say(f"Queued {_quoted(title)} for clipping", "queued",
+                      "" if item["platform"] == "folder" else item["url"])
             queued_any = True
         if queued_any:
             self._worker.notify()
@@ -937,6 +952,15 @@ class ChannelWatcher(threading.Thread):
         except ValueError as e:  # gone from the folder, or changed since it was found
             d.set_watch_item(item["id"], state="skipped", reason=_short(e))
             self._say(f"Skipped {_quoted(title)}: {_short(e)}", "info")
+            return False
+        except OSError as e:
+            # FFmpeg missing, or the disk refused the copy. Said on the item,
+            # where Clip this tries again, rather than raised out of the tick,
+            # which would stop every other watch at this file each time.
+            # strerror, because the whole message names the file's path.
+            reason = f"Couldn't copy it into Clips Kitty: {e.strerror or type(e).__name__}"
+            d.set_watch_item(item["id"], state="error", reason=reason)
+            self._say(f"Couldn't clip {_quoted(title)}: {reason}", "error")
             return False
         # Its length, which the queue's time estimate scales by, as /videos/local records it.
         d.upsert_video(vid, title=title, duration=imported.seconds)
@@ -991,8 +1015,8 @@ class ChannelWatcher(threading.Thread):
                 # Offered on the phone when the job finished, and posted from
                 # there: never through WoopSocial, whatever an earlier mode or
                 # a restart left on the item.
-                self._to_phone(d, item, watch)
-                self._broadcaster.publish({"type": "automation"})
+                if self._to_phone(d, item, watch, now):
+                    self._broadcaster.publish({"type": "automation"})
                 continue
             # A plugin this job chose to rate or understand the moments didn't
             # run: the clips were made without it, so a person looks first.
@@ -1024,23 +1048,40 @@ class ChannelWatcher(threading.Thread):
                 )
             self._broadcaster.publish({"type": "automation"})
 
-    def _to_phone(self, d: StateDB, item, watch) -> None:
+    def _to_phone(self, d: StateDB, item, watch, now: float) -> bool:
         """A finished video of a watch set to Ask me on my phone. Its clips
         were offered when its job finished (remote_approval/notifier.py, even
         when Settings offer basketball only), so this only says so, and says
-        honestly when nothing could reach the phone."""
+        honestly when nothing reached the phone: whether they were sent is
+        read from the offer itself, never guessed from the switches. False
+        while it waits a moment for the offer, with nothing changed."""
         if not d.clips_for_video(item["video_id"]):
+            self._awaiting_offer.pop(item["id"], None)
             d.set_watch_item(item["id"], publish_state="done",
                              publish_error=_no_clips_error(d.get_outcome(item["video_id"])))
             self._say(f"No clips were made from {_quoted(item['title'])}, so nothing was sent to your phone.",
                       "done")
-            return
-        problem = phone_problem(d)
+            return True
+        from remote_approval import store as ra_store
+
+        offered = bool(item["job_id"]) and bool(ra_store.reviews_for_job(d, int(item["job_id"])))
+        problem = phone_problem(d, offered=offered)
+        if not offered and not problem:
+            # Nothing in Settings stops an offer, so it may still be on its
+            # way (OFFER_WAIT_SECONDS). Past that, none is coming: its clips
+            # were all posted already, say, or the job finished while the
+            # channel was set to something else.
+            first = self._awaiting_offer.setdefault(item["id"], now)
+            if now - first < OFFER_WAIT_SECONDS:
+                return False
+            problem = _NOT_SENT
+        self._awaiting_offer.pop(item["id"], None)
         failed = _steps_failed(d, item, watch) if item["publish_state"] == "" else []
         note = problem or (f"Clips Kitty made these clips without {', '.join(failed)}. "
                            "Check them before you approve them." if failed else "")
         d.set_watch_item(item["id"], publish_state="phone", publish_error=note, publish_retry_at=0)
         self._say(f"Clips of {_quoted(item['title'])} are ready. {problem or _SENT_TO_PHONE}", "done")
+        return True
 
     def publish(self, d: StateDB, item, watch) -> dict:
         """Send a finished video's clips out with its watch's settings."""
