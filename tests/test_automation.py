@@ -1726,12 +1726,30 @@ def test_a_phone_watch_never_publishes_from_here(env):
     item = env.item("newnewnew01")
     assert (item["publish_state"], item["publish_error"]) == ("phone", "")
     assert env.publish_calls == 0
-    assert "Clips of “Video newnewnew01” are ready. Sent to your phone for approval." in feed_lines(env)
+    assert "Clips of “Video newnewnew01” are ready. Ready to approve from your phone." in feed_lines(env)
     # Publish from the Watch page is refused, and a restart's leftover is not sent either.
     assert env.client.post(f"/automation/items/{item['id']}/publish").status_code == 409
     env.run(lambda d: d.set_watch_item(item["id"], publish_state="publishing"))
     env.later(5)
     assert env.publish_calls == 0 and env.item("newnewnew01")["publish_state"] == "phone"
+
+
+def test_a_phone_watch_with_muse_alone_waits_for_its_offer(env):
+    """WhatsApp off and a Muse agent connected: the relay keeps the offer for
+    Muse, so the watch waits for it instead of saying WhatsApp is needed,
+    even when it looks before the worker has made the offer."""
+    phone_on(env, whatsapp_enabled=False)
+    env.run(lambda d: ra_settings.save(d, {"muse": {"enabled": True}}, internal=True))
+    with_publish_mode(env, "phone")
+    clips_on_disk(env)
+    env.later(5)
+    assert env.item("newnewnew01")["publish_state"] == ""  # its offer is still on its way
+    assert announced(env) is not None
+    env.later(5)
+    item = env.item("newnewnew01")
+    assert (item["publish_state"], item["publish_error"]) == ("phone", "")
+    assert "Clips of “Video newnewnew01” are ready. Ready to approve from your phone." in feed_lines(env)
+    assert env.publish_calls == 0
 
 
 def test_a_phone_watch_says_so_when_nothing_could_reach_the_phone(env):
@@ -1741,7 +1759,7 @@ def test_a_phone_watch_says_so_when_nothing_could_reach_the_phone(env):
     env.later(5)
     item = env.item("newnewnew01")
     assert item["publish_state"] == "phone" and item["publish_error"].startswith("Nothing was sent to your phone.")
-    assert not any("Sent to your phone" in line for line in feed_lines(env))
+    assert not any("Ready to approve from your phone" in line for line in feed_lines(env))
     assert env.publish_calls == 0
 
 
@@ -1765,7 +1783,7 @@ def test_a_phone_watch_never_says_clips_were_sent_when_no_offer_was_made(env):
     env.later(automation.OFFER_WAIT_SECONDS)
     item = env.item("newnewnew01")
     assert (item["publish_state"], item["publish_error"]) == ("phone", "Nothing was sent to your phone for this video.")
-    assert not any("Sent to your phone" in line for line in feed_lines(env))
+    assert not any("Ready to approve from your phone" in line for line in feed_lines(env))
     assert env.publish_calls == 0
 
 
@@ -1780,7 +1798,7 @@ def test_a_phone_watch_says_what_was_sent_whatever_settings_say_now(env):
     env.later(5)
     item = env.item("newnewnew01")
     assert (item["publish_state"], item["publish_error"]) == ("phone", "")
-    assert "Clips of “Video newnewnew01” are ready. Sent to your phone for approval." in feed_lines(env)
+    assert "Clips of “Video newnewnew01” are ready. Ready to approve from your phone." in feed_lines(env)
 
 
 @pytest.mark.parametrize("platforms, offered", [

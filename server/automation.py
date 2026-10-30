@@ -90,7 +90,9 @@ _MISSED = "Posted while Clips Kitty wasn't watching."
 _BASELINE = "Posted before you started watching this channel."
 _MISSED_FILE = "Added while Clips Kitty wasn't watching."
 _BASELINE_FILE = "In the folder before you started watching it."
-_SENT_TO_PHONE = "Sent to your phone for approval."
+# True on WhatsApp (a message was sent) and with Muse alone (nothing is sent:
+# the creator's Muse agent finds the offer when asked).
+_READY_ON_PHONE = "Ready to approve from your phone."
 _NOT_SENT = "Nothing was sent to your phone for this video."
 
 _JOB_STATES = {
@@ -194,22 +196,25 @@ def phone_problem(d: StateDB, *, offered: bool = False) -> str:
     """Why a watch set to Ask me on my phone can't be approved from the phone,
     named as Settings names its switches, or "" when it can. `offered` is
     whether this video's clips really were offered when its job finished
-    (remote_approval/notifier.py): what was sent then is the truth, whatever
-    the switches say now, so the Watch page never says clips were sent when
-    nothing was, nor the other way round."""
+    (remote_approval/notifier.py): what was offered then is the truth,
+    whatever the switches say now, so the Watch page never says clips are
+    waiting when nothing was offered, nor the other way round. An offer
+    reaches the phone on WhatsApp or through the creator's Muse agent, the
+    same two ways the notifier checks."""
     from remote_approval import settings as ra_settings
 
     s = ra_settings.load(d)
     where = "in Settings → Notifications & Remote Approval"
     if not offered:
-        if not s["whatsapp_enabled"]:
-            return f"Nothing was sent to your phone. Set up WhatsApp and turn on Send me WhatsApp messages {where}."
+        if not (s["whatsapp_enabled"] or ra_settings.muse_connected(s)):
+            return ("Nothing was sent to your phone. Connect your Muse agent, or set up WhatsApp and "
+                    f"turn on Send me WhatsApp messages {where}.")
         if not s["notify_on_finish"]:
             return f"Nothing was sent to your phone. Turn on When highlights are ready {where}."
         return ""
     if not s["remote_approvals"]:
-        return ("Your phone was told, but can't approve yet. Turn on Let me approve publishing "
-                f"from my phone {where}.")
+        return ("These clips were offered, but can't be approved from your phone yet. Turn on Let me "
+                f"approve publishing from my phone {where}.")
     return ""
 
 
@@ -1080,7 +1085,7 @@ class ChannelWatcher(threading.Thread):
         note = problem or (f"Clips Kitty made these clips without {', '.join(failed)}. "
                            "Check them before you approve them." if failed else "")
         d.set_watch_item(item["id"], publish_state="phone", publish_error=note, publish_retry_at=0)
-        self._say(f"Clips of {_quoted(item['title'])} are ready. {problem or _SENT_TO_PHONE}", "done")
+        self._say(f"Clips of {_quoted(item['title'])} are ready. {problem or _READY_ON_PHONE}", "done")
         return True
 
     def publish(self, d: StateDB, item, watch) -> dict:

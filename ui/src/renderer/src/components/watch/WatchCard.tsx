@@ -539,7 +539,7 @@ function ItemRow({
           {/* Approved and posted from the phone; once anything is posted,
               the platform counts below say so. */}
           {item.publish_state === 'phone' && !item.publish_error && deliveries.length === 0 && (
-            <span className="text-accent">{t('Sent to your phone for approval.')}</span>
+            <span className="text-accent">{t('Ready to approve from your phone.')}</span>
           )}
           {item.publish_error && <p className="text-warn">{item.publish_error}</p>}
           {deliveries.length > 0 && (
