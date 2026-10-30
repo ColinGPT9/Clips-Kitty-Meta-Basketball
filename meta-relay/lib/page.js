@@ -10,6 +10,9 @@ import { safeLink } from "./meta.js";
 
 const LABELS = { instagram: "Instagram Reels", facebook: "Facebook Page Reels", threads: "Threads" };
 
+/** What the page says once wrong PINs have blocked approving from the phone (worker.js pinBlocked). */
+export const PIN_BLOCKED = "Approving from your phone is blocked after too many wrong PINs. Set a new PIN in Clips Kitty on your PC to unblock it. You can still ask to be reminded, or cancel.";
+
 export function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
@@ -71,7 +74,7 @@ function clipCard(c, token, { selectable, thumbs }) {
 }
 
 /** The page for an offer, in whatever state it is in. */
-export function approvalPage({ approval, payload, token, csrf, accounts, thumbs, nowS, error = "" }) {
+export function approvalPage({ approval, payload, token, csrf, accounts, thumbs, nowS, error = "", blocked = false }) {
   const title = payload.title || "Your video";
   const head = `<h1>${esc(title)}</h1><p class="muted">${esc(payload.summary_text || "")}</p>${payload.muse_line ? `<p class="small">${esc(payload.muse_line)} <span class="pill">Muse Spark</span></p>` : ""}`;
   const clips = payload.clips || [];
@@ -107,6 +110,13 @@ export function approvalPage({ approval, payload, token, csrf, accounts, thumbs,
     if (!a.connected) return `<div class="card row muted"><input type="checkbox" disabled> ${esc(LABELS[p])} <span class="small">(not connected)</span></div>`;
     return `<label class="card row"><input type="checkbox" name="platform" value="${p}"${preferred.has(p) ? " checked" : ""}><span>${esc(LABELS[p])}<br><span class="small muted">${esc(a.name || "")}${p === "threads" ? " · a post linking to the Reel" : ""}</span></span></label>`;
   }).join("");
+  // Blocked: no PIN box and no Approve button, until a new PIN is set on the
+  // PC. Reminding and cancelling never needed the PIN, so they stay.
+  const pinBox = blocked
+    ? (error === PIN_BLOCKED ? "" : `<div class="card notice bad">${esc(PIN_BLOCKED)}</div>`)
+    : `<div class="card"><label for="pin" class="small muted">Approval PIN (set in Clips Kitty)</label>
+<input id="pin" type="password" name="pin" inputmode="numeric" autocomplete="off" maxlength="8">
+<p class="small muted">Enter your PIN yourself. Never give it to an assistant.</p></div>`;
   const form = `<form method="post" action="/a/${esc(token)}">
 <input type="hidden" name="csrf" value="${esc(csrf)}">
 ${error ? `<div class="card notice bad">${esc(error)}</div>` : ""}
@@ -114,11 +124,9 @@ ${error ? `<div class="card notice bad">${esc(error)}</div>` : ""}
 <h2>Publish to</h2>${dest}
 <h2>Confirm</h2>
 <label class="card row"><input type="checkbox" name="confirm" value="yes"><span>Post the clips I ticked, publicly, to the places I ticked.</span></label>
-<div class="card"><label for="pin" class="small muted">Approval PIN (set in Clips Kitty)</label>
-<input id="pin" type="password" name="pin" inputmode="numeric" autocomplete="off" maxlength="8"></div>
+${pinBox}
 <div class="buttons">
-<button class="go" name="action" value="approve">Approve and publish</button>
-<button name="action" value="defer">Remind me later</button>
+${blocked ? "" : `<button class="go" name="action" value="approve">Approve and publish</button>\n`}<button name="action" value="defer">Remind me later</button>
 <button name="action" value="cancel">Cancel, post nothing</button>
 </div></form>`;
   return shell(title, `${head}${expires}${form}`);
