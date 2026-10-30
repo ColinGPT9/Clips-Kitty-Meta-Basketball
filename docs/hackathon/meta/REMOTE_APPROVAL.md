@@ -8,10 +8,13 @@ and every rule along the way.
 ## The flow
 
 1. **The job finishes.** The job announcer calls the notifier. For a
-   basketball `process` job with WhatsApp on, it snapshots the best clips
-   (up to `max_clips`, best score first, skipping missing files), pins each
+   basketball `process` job with WhatsApp on, it takes the clips this run
+   rendered (files written after the job was queued, so an earlier run of
+   the same video is left out) and snapshots the best of them (up to
+   `max_clips`, best score first, skipping missing files). It pins each
    file's size and modification time, computes a fingerprint over them, and
-   counts highlights by category from the pipeline's own events. State:
+   counts highlights by category from the pipeline's own events (a
+   `big_moment` the pipeline could not name is counted as a "big moment"). State:
    `READY_FOR_REVIEW` → `NOTIFICATION_PENDING`. A failed job queues the plain
    failure message instead, with no error text.
 2. **The message goes out.** The publish worker's loop sends the outbox to

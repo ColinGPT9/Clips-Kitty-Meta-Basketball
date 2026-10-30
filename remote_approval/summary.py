@@ -29,6 +29,9 @@ CATEGORIES = (
     ("assists", "assist", "assists"),
     ("fan_reactions", "reaction", "reactions"),
 )
+# The pipeline marks a moment its signals agree on as big_moment when it
+# cannot confirm which play it was (it never guesses a type).
+BIG = ("big_moments", "big moment", "big moments")
 OTHER = ("other", "other play", "other plays")
 
 # Used only if config/sports.yaml cannot be read, so a notification never
@@ -74,7 +77,7 @@ def category_of(scores: dict, events: dict[str, set[str]] | None = None) -> str:
     for cid, _, _ in CATEGORIES:
         if kind and kind in events.get(cid, ()):
             return cid
-    return OTHER[0]
+    return BIG[0] if kind == "big_moment" else OTHER[0]
 
 
 def is_basketball(job_payload: dict, clips) -> bool:
@@ -154,7 +157,7 @@ def counts_text(found: dict[str, int]) -> str:
     No newlines and no leading or trailing parameter text, so it can go
     straight into a WhatsApp template's body parameter."""
     parts = []
-    for cid, one, many in (*CATEGORIES, OTHER):
+    for cid, one, many in (*CATEGORIES, BIG, OTHER):
         n = found.get(cid, 0)
         if n:
             parts.append(f"{n} {one if n == 1 else many}")

@@ -7,7 +7,8 @@ runs the real one.
 """
 
 import json
-from datetime import timedelta
+import os
+from datetime import datetime, timedelta
 
 import pytest
 from remote_approval_fake import SECRET, FakeRelay, finished_job, sign_command
@@ -87,6 +88,11 @@ def test_a_clip_counts_once_in_its_first_category():
     assert summary.category_of({"sport_event": "game_winner"}, events) == "clutch"  # also scoring
     assert summary.category_of({"sport_event": "free_throw"}, events) == "other"
     assert summary.category_of({}, events) == "other"
+    # Marked by the crowd and the signals without a confirmed type: named as
+    # what it is, not lumped in with other plays.
+    assert summary.category_of({"sport_event": "big_moment"}, events) == "big_moments"
+    assert summary.counts_text({"dunks": 1, "big_moments": 1, "other": 2}) == \
+        "1 dunk, 1 big moment and 2 other plays"
 
 
 def test_the_snapshot_pins_each_file_and_the_fingerprint_follows_it(db, tmp_path):
@@ -131,6 +137,24 @@ def test_a_finished_basketball_job_is_offered_once(db, on):
     # The same job announced again: no second offer, no second message.
     assert notifier.on_job_finished(db, job, "done") is None
     assert store.pending_outbox(db) == 1
+
+
+def test_only_the_clips_this_run_rendered_are_offered(db, on):
+    # The same video was processed before, as an ordinary video: its clip is
+    # still in the table, with a file written before this job was queued.
+    job = finished_job(db, on)
+    earlier = on / "clips" / "earlier.mp4"
+    earlier.write_bytes(b"x" * 5000)
+    old = (datetime.fromisoformat(job["created_at"]) - timedelta(hours=2)).timestamp()
+    os.utime(earlier, (old, old))
+    db.add_clip(job["video_id"], 500.0, 530.0, 99, "Earlier run", path=str(earlier),
+                scores=json.dumps({"sport_event": "highlight"}))
+
+    review = store.get_review(db, notifier.on_job_finished(db, job, "done"))
+    assert str(earlier) not in [c["path"] for c in review["clips"]]
+    assert len(review["clips"]) == 5
+    assert review["summary"]["total_clips"] == 5
+    assert review["summary"]["counts"]["other"] == 1  # this run's free throw only
 
 
 def test_other_sports_are_left_alone(db, on):

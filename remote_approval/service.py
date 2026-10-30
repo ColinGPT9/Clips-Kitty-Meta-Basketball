@@ -420,7 +420,7 @@ def ask_again(db, review_id: int) -> int | None:
     job = db.get_job(old["job_id"])
     return notifier.offer(db, job_id=old["job_id"], video_id=old["video_id"],
                           title=(job["title"] if job else "") or old["title"],
-                          clips=db.clips_for_video(old["video_id"]) if old["video_id"] else [])
+                          clips=notifier.clips_of_run(db, job))
 
 
 def resend(db, review_id: int) -> bool:

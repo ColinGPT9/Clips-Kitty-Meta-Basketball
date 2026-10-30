@@ -13,7 +13,8 @@ job unless the creator asks for a new one.
 """
 
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
+from pathlib import Path
 
 from remote_approval import settings as ra_settings
 from remote_approval import states, store, summary
@@ -32,7 +33,7 @@ def on_job_finished(db, job, status: str) -> int | None:
         payload = {}
     row = db.get_job(job["id"])
     video_id = (row["video_id"] if row else "") or ""
-    clips = db.clips_for_video(video_id) if video_id else []
+    clips = clips_of_run(db, row)
     if config["basketball_only"] and not summary.is_basketball(payload if isinstance(payload, dict) else {},
                                                                clips):
         return None
@@ -49,6 +50,33 @@ def on_job_finished(db, job, status: str) -> int | None:
         return None  # already offered and still open: an announce repeated
     return offer(db, job_id=int(job["id"]), video_id=video_id,
                  title=(row["title"] if row else "") or job["title"] or "", clips=clips, config=config)
+
+
+def clips_of_run(db, job_row) -> list:
+    """The clips this job rendered, not every clip its video has.
+
+    Clips are kept per video, so a video processed before (say once as an
+    ordinary video, then as basketball) still has the earlier run's clips.
+    Those are not this game's highlights. A clip is this run's when its file
+    was written after the job was queued: a new clip has a new file, and a
+    window found again is pointed at its fresh render by the pipeline."""
+    video_id = (job_row["video_id"] if job_row else "") or ""
+    if not video_id:
+        return []
+    clips = db.clips_for_video(video_id)
+    try:
+        # StateDB stamps local time without a zone, as timestamp() reads it.
+        since = datetime.fromisoformat(str(job_row["created_at"])).timestamp()
+    except (TypeError, ValueError, KeyError, IndexError):
+        return list(clips)
+    out = []
+    for clip in clips:
+        try:
+            if Path(clip["path"] or "").stat().st_mtime >= since:
+                out.append(clip)
+        except OSError:
+            continue  # no file: nothing that could be offered anyway
+    return out
 
 
 def offer(db, *, job_id: int, video_id: str, title: str, clips, config: dict | None = None,
