@@ -6,7 +6,8 @@ import { sessionSecret } from './plugins'
  *  edition. Routes that change something need the desktop app's session
  *  secret (the plugin routes' one), so in a plain browser the card can read
  *  but not change. Nothing here holds a token, a secret or a phone number:
- *  the engine only ever knows the number's last four digits. */
+ *  the engine only ever knows the number's last four digits, and a new Muse
+ *  key passes through once, for the card to show, and is kept nowhere. */
 
 export type Platform = 'instagram' | 'facebook' | 'threads'
 
@@ -35,6 +36,8 @@ export interface RemoteSettings {
   pin_set: boolean
   accounts: Partial<Record<Platform, Account>>
   templates: Record<string, string>
+  /** What the relay last said about the Muse key: never the key itself. Times in unix seconds. */
+  muse: { enabled?: boolean; created_at?: number; last_used?: number }
   registered: boolean
   platform_labels: Record<Platform, string>
 }
@@ -141,8 +144,21 @@ export const remoteApproval = {
     call<{ templates?: Record<string, string> }>('/remote-approval/templates', send('POST', { create }), true),
   reviews: (limit = 10) => call<{ reviews: Review[] }>(`/remote-approval/reviews?limit=${limit}`),
   act: (id: number, action: 'cancel' | 'retry' | 'ask-again' | 'resend') =>
-    call<{ review: Review }>(`/remote-approval/reviews/${id}/${action}`, send('POST'), true)
+    call<{ review: Review }>(`/remote-approval/reviews/${id}/${action}`, send('POST'), true),
+  /** A new key for the creator's Muse agent, replacing any older one. In this answer once: nothing keeps it. */
+  museToken: () => call<RemoteStatus & { key: string }>('/remote-approval/muse/token', send('POST'), true),
+  museRevoke: () => call<RemoteStatus>('/remote-approval/muse/revoke', send('POST'), true)
 }
+
+/** Where Muse finds the relay: its MCP server, and the same tools described in OpenAPI. */
+export function museAddresses(relayUrl: string): { mcp: string; openapi: string } {
+  const base = relayUrl.replace(/\/+$/, '')
+  return { mcp: `${base}/mcp`, openapi: `${base}/muse/openapi.json` }
+}
+
+/** What the creator says to Muse to add the connector. The key itself goes into Muse's credential prompt. */
+export const museSentence = (relayUrl: string): string =>
+  `Create a custom connector called Clips Kitty: a remote MCP server at ${museAddresses(relayUrl).mcp} that uses the header Authorization: Bearer <your key>`
 
 /** How an offer's state reads in Settings. */
 export const STATE_TEXT: Record<string, string> = {
@@ -159,6 +175,12 @@ export const STATE_TEXT: Record<string, string> = {
   FAILED: 'Not published',
   CANCELLED: 'Cancelled',
   EXPIRED: 'Link expired'
+}
+
+/** The same, for offers that go to Muse alone (no WhatsApp message is sent). */
+export const MUSE_STATE_TEXT: Record<string, string> = {
+  NOTIFICATION_PENDING: 'Sending to your relay',
+  NOTIFICATION_SENT: 'Ready for Muse'
 }
 
 export const PLATFORMS: Platform[] = ['instagram', 'facebook', 'threads']

@@ -3,6 +3,9 @@ import { t } from '../lib/i18n'
 import { canManage } from '../lib/plugins'
 import {
   isPairLink,
+  MUSE_STATE_TEXT,
+  museAddresses,
+  museSentence,
   PLATFORMS,
   remoteApproval,
   STATE_TEXT,
@@ -15,14 +18,16 @@ import { useEvents } from '../lib/useEvents'
 
 /** Settings → Notifications & Remote Approval (new for the Meta hackathon edition).
  *
- *  A WhatsApp message when a video's highlights are ready (basketball ones,
- *  unless the creator opts in to gaming and every other video), and
- *  publishing to Instagram, Facebook and Threads approved from the phone.
- *  All of it goes through the creator's own relay (meta-relay/), which holds
- *  the WhatsApp and Meta tokens; this PC only calls out to it, so nothing
- *  here opens a port. Remote approval stays off until a number is paired
- *  and confirmed here and an approval PIN is set. The card never sees a
- *  token, a secret or a full phone number. */
+ *  Word through the creator's Muse agent, or a WhatsApp message, when a
+ *  video's highlights are ready (basketball ones, unless the creator opts in
+ *  to gaming and every other video), and publishing to Instagram, Facebook
+ *  and Threads approved from the phone. All of it goes through the creator's
+ *  own relay (meta-relay/), which holds the WhatsApp and Meta tokens and is
+ *  where Muse connects; this PC only calls out to it, so nothing here opens
+ *  a port. Remote approval stays off until Muse is connected or a number is
+ *  paired and confirmed, and an approval PIN is set. The card never sees a
+ *  token, a secret or a full phone number; a new Muse key is shown once and
+ *  then forgotten. */
 
 const POLL_MS = 4000
 
@@ -38,6 +43,8 @@ export default function NotificationsApprovalCard(): JSX.Element {
   const [pin, setPin] = useState('')
   const [pair, setPair] = useState<PairCode | null>(null)
   const [waiting, setWaiting] = useState(false)
+  // A Muse key just made: shown until Done, held nowhere else.
+  const [museKey, setMuseKey] = useState('')
   const mounted = useRef(true)
 
   const load = (): void => {
@@ -124,9 +131,21 @@ export default function NotificationsApprovalCard(): JSX.Element {
 
   const s = status.settings
   const paired = s.pairing.state === 'confirmed'
+  const museOn = Boolean(s.muse?.enabled)
+  // Muse or a paired number: either way an offer can reach the phone.
+  const reachable = paired || museOn
   const connected = (p: Platform): boolean => Boolean(s.accounts[p]?.connected)
   const label = (p: Platform): string => s.platform_labels[p] ?? p
   const disabled = busy || !allowed
+  const addresses = museAddresses(s.relay_url)
+
+  const makeMuseKey = (): Promise<void> =>
+    run(async () => {
+      if (museOn && !window.confirm(t('Make a new key? The old one stops working, so Muse needs the new one.'))) return
+      const { key, ...next } = await remoteApproval.museToken()
+      setStatus(next)
+      setMuseKey(key)
+    })
 
   // `invert`: the box is ticked when the setting is off (basketball_only reads
   // as "Offer gaming and other videos too").
@@ -152,7 +171,7 @@ export default function NotificationsApprovalCard(): JSX.Element {
         <h3 className="font-semibold">{t('Notifications & Remote Approval')}</h3>
         <p className="text-sm text-muted">
           {t(
-            "Get a WhatsApp message when a video's highlights are ready, and choose from your phone which clips go to Instagram, Facebook and Threads. Messages and posts go through your own relay; this PC only calls out to it."
+            "Hear from your Muse agent or on WhatsApp when a video's highlights are ready, and choose from your phone which clips go to Instagram, Facebook and Threads. Everything goes through your own relay; this PC only calls out to it."
           )}
         </p>
       </div>
@@ -175,9 +194,15 @@ export default function NotificationsApprovalCard(): JSX.Element {
               disabled={disabled}
               onClick={() =>
                 void run(async () => {
-                  if (!window.confirm(t('Disconnect? Open offers are cancelled and the relay forgets this PC.'))) return
+                  if (
+                    !window.confirm(
+                      t('Disconnect this PC from your relay? Open offers are cancelled, WhatsApp messages stop and your Muse key stops working.')
+                    )
+                  )
+                    return
                   setStatus(await remoteApproval.disconnect())
                   setPair(null)
+                  setMuseKey('')
                   setNotice(t('Disconnected.'))
                 })
               }
@@ -222,10 +247,86 @@ export default function NotificationsApprovalCard(): JSX.Element {
         )}
       </section>
 
-      {/* 2. The WhatsApp number */}
+      {/* 2. The creator's Muse agent: a custom connector on the relay */}
       {s.registered && (
         <section className="space-y-2 border-t border-raised/60 pt-3">
-          <h4 className="text-sm font-semibold">{t('2. Your WhatsApp number')}</h4>
+          <h4 className="text-sm font-semibold">{t('2. Your Muse agent')}</h4>
+          <p className="text-xs text-muted">
+            {t(
+              'Muse can tell you when highlights are ready, give you the approval link, say what got posted, remind you later or cancel an offer. It can never post: you approve on the approval page with your PIN.'
+            )}
+          </p>
+          {museOn ? (
+            <div className="flex items-center gap-2 flex-wrap text-sm">
+              <span className="text-success">{t('Connected')}</span>
+              <span className="text-xs text-muted">
+                {s.muse.last_used
+                  ? `${t('Last used')} ${new Date(s.muse.last_used * 1000).toLocaleString()}`
+                  : t('Not used yet')}
+              </span>
+              <div className="flex gap-1.5 ml-auto">
+                <button className="btn-ghost !py-1 !px-3 text-xs" disabled={disabled} onClick={() => void makeMuseKey()}>
+                  {t('Make a new key')}
+                </button>
+                <button
+                  className="btn-ghost !py-1 !px-3 text-xs"
+                  disabled={disabled}
+                  onClick={() =>
+                    void run(async () => {
+                      if (!window.confirm(t('Revoke the Muse key? Muse stops working with Clips Kitty until you make a new key.')))
+                        return
+                      setStatus(await remoteApproval.museRevoke())
+                      setMuseKey('')
+                      setNotice(t('The Muse key no longer works.'))
+                    })
+                  }
+                >
+                  {t('Revoke')}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button className="btn-accent !py-1 !px-3 text-xs" disabled={disabled} onClick={() => void makeMuseKey()}>
+              {t('Make a Muse key')}
+            </button>
+          )}
+          {museKey && (
+            <div className="rounded bg-raised/30 p-2 space-y-1.5 text-xs">
+              <p className="font-semibold">{t('Your Muse key. It is shown only this once:')}</p>
+              <div className="flex items-start gap-2">
+                <code className="font-mono break-all select-all">{museKey}</code>
+                <CopyButton text={museKey} />
+              </div>
+              <p className="text-warn">
+                {t("When Muse asks for the key, paste it into Muse's credential prompt, never into the chat.")}
+              </p>
+              <button className="btn-ghost !py-0.5 !px-2 text-xs" onClick={() => setMuseKey('')}>
+                {t('Done')}
+              </button>
+            </div>
+          )}
+          {(museOn || museKey) && (
+            <div className="text-xs space-y-1">
+              <p className="text-muted">{t('Say this to Muse:')}</p>
+              <div className="flex items-start gap-2">
+                <code className="break-all">{museSentence(s.relay_url)}</code>
+                <CopyButton text={museSentence(s.relay_url)} />
+              </div>
+              <p className="text-muted">
+                {t('Connector address')}: <code className="break-all">{addresses.mcp}</code>
+              </p>
+              <p className="text-muted">
+                {t('If Muse asks for API details')}: <code className="break-all">{addresses.openapi}</code>
+              </p>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* 3. The WhatsApp number, for messages as well as (or instead of) Muse */}
+      {s.registered && (
+        <section className="space-y-2 border-t border-raised/60 pt-3">
+          <h4 className="text-sm font-semibold">{t('3. WhatsApp (optional)')}</h4>
           {paired && (
             <p className="text-sm">
               {t('Paired with the number ending in')} <span className="font-semibold">{s.pairing.tail}</span>
@@ -317,10 +418,10 @@ export default function NotificationsApprovalCard(): JSX.Element {
         </section>
       )}
 
-      {/* 3. Approval PIN and Meta accounts */}
-      {s.registered && paired && (
+      {/* 4. Approval PIN and Meta accounts */}
+      {s.registered && reachable && (
         <section className="space-y-2 border-t border-raised/60 pt-3">
-          <h4 className="text-sm font-semibold">{t('3. Approval PIN and accounts')}</h4>
+          <h4 className="text-sm font-semibold">{t('4. Approval PIN and accounts')}</h4>
           <div className="flex items-center gap-2 flex-wrap">
             <input
               className="input !w-28 !py-1 text-sm"
@@ -393,10 +494,10 @@ export default function NotificationsApprovalCard(): JSX.Element {
         </section>
       )}
 
-      {/* 4. Remote approval */}
-      {s.registered && paired && (
+      {/* 5. Remote approval */}
+      {s.registered && reachable && (
         <section className="space-y-2 border-t border-raised/60 pt-3">
-          <h4 className="text-sm font-semibold">{t('4. Approve from your phone')}</h4>
+          <h4 className="text-sm font-semibold">{t('5. Approve from your phone')}</h4>
           {toggle(
             'remote_approvals',
             t('Let me approve publishing from my phone'),
@@ -483,7 +584,16 @@ export default function NotificationsApprovalCard(): JSX.Element {
         <section className="space-y-2 border-t border-raised/60 pt-3">
           <h4 className="text-sm font-semibold">{t('Recent offers')}</h4>
           {reviews.map((r) => (
-            <ReviewRow key={r.id} review={r} disabled={disabled} label={label} open={open} run={run} reload={load} />
+            <ReviewRow
+              key={r.id}
+              review={r}
+              disabled={disabled}
+              museOnly={museOn && !(paired && s.whatsapp_enabled)}
+              label={label}
+              open={open}
+              run={run}
+              reload={load}
+            />
           ))}
         </section>
       )}
@@ -506,12 +616,15 @@ export default function NotificationsApprovalCard(): JSX.Element {
 function ReviewRow(props: {
   review: Review
   disabled: boolean
+  /** Offers go to Muse alone: no WhatsApp message is sent for them. */
+  museOnly: boolean
   label: (p: Platform) => string
   open: (url: string) => Promise<boolean>
   run: (work: () => Promise<void>) => Promise<void>
   reload: () => void
 }): JSX.Element {
-  const { review: r, disabled, label, open, run, reload } = props
+  const { review: r, disabled, museOnly, label, open, run, reload } = props
+  const stateText = (museOnly ? MUSE_STATE_TEXT[r.state] : undefined) ?? STATE_TEXT[r.state] ?? r.state
   const act = (action: 'cancel' | 'retry' | 'ask-again' | 'resend'): Promise<void> =>
     run(async () => {
       await remoteApproval.act(r.id, action)
@@ -523,7 +636,7 @@ function ReviewRow(props: {
     <div className="text-sm space-y-1 rounded bg-raised/30 p-2">
       <div className="flex items-center gap-2 flex-wrap">
         <span className="font-medium truncate max-w-[16rem]">{r.title || t('Untitled video')}</span>
-        <span className={`text-xs ${tone}`}>{t(STATE_TEXT[r.state] ?? r.state)}</span>
+        <span className={`text-xs ${tone}`}>{t(stateText)}</span>
         <div className="flex gap-1.5 ml-auto">
           {r.can_resend && (
             <button className="btn-ghost !py-0.5 !px-2 text-xs" disabled={disabled} onClick={() => void act('resend')}>
@@ -568,6 +681,24 @@ function ReviewRow(props: {
         </div>
       ))}
     </div>
+  )
+}
+
+/** Copies text (a Muse key, the sentence for Muse) and says so. */
+function CopyButton({ text }: { text: string }): JSX.Element {
+  const [copied, setCopied] = useState(false)
+  return (
+    <button
+      className="btn-ghost !py-0.5 !px-2 text-xs shrink-0"
+      onClick={() =>
+        void navigator.clipboard.writeText(text).then(
+          () => setCopied(true),
+          () => setCopied(false)
+        )
+      }
+    >
+      {copied ? t('Copied') : t('Copy')}
+    </button>
   )
 }
 
