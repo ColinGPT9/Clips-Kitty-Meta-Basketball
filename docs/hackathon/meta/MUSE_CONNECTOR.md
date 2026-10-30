@@ -77,10 +77,10 @@ next pass, checks it (`remote_approval/commands.py`) and publishes.
    the same tools as plain HTTPS routes with the same key. A plain-text guide
    is at `https://<your relay>/muse`.
 
-6. **Set an approval PIN and connect your accounts** (sections 4 and 5 in
-   Settings), then tick **Let me approve publishing from my phone**. With
-   Muse connected this no longer needs a WhatsApp number; it still needs the
-   PIN.
+6. **Set an approval PIN and connect your accounts** (section 4 in
+   Settings), then tick **Let me approve publishing from my phone**
+   (section 5). With Muse connected this no longer needs a WhatsApp number;
+   it still needs the PIN.
 
 Try it: "Clips Kitty, what highlights are ready?"
 
@@ -93,9 +93,9 @@ Every tool works only for the PC whose key it is.
 | `list_ready_highlights` | No | Offers waiting for a decision: title, what was found, kind of video, each clip (title, play, length, where it is already posted), the places it can post, when the link expires, any reminder, and when the PC last checked in. Optional: `match`, `since`, `limit` (1 to 20), `include_captions`. Never a link token or a thumbnail. |
 | `get_approval_link` | No | The approval link for one offer (`approval_id`, or `match` to pick by name, or the one open offer). When none or several match, the choices instead, so Muse asks which one. The link is the same one a WhatsApp message carries. Each link handed out is logged as Muse's. |
 | `list_recent_posts` | No | Offers approved in the last 1 to 7 days and what became of each clip, with only the links Instagram, Facebook and Threads returned. |
-| `remind_me_later` | The offer | What the page's **Remind me later** does (15 to 1440 minutes, or your usual wait). With WhatsApp set up, it sends the link again then; without it, Muse is told the time and reminds you itself. |
+| `remind_me_later` | The offer | What the page's **Remind me later** does (15 to 1440 minutes, or your usual wait). With WhatsApp set up, it sends the link again then; without it, nothing is sent then, and Muse is told the time so it can remind you itself. |
 | `cancel_offer` | The offer | What the page's **Cancel** does. Can't be undone, so it needs `confirm: true`, which Muse should only send after you say so. |
-| `relay_status` | No | When the PC last checked in, whether a PIN is set, the WhatsApp number's last four digits, the connected accounts and how many offers are open. |
+| `relay_status` | No | When the PC last checked in, whether a PIN is set, whether wrong PINs have blocked approving from the phone, the WhatsApp number's last four digits, the connected accounts and how many offers are open. |
 
 There is no tool that approves, publishes, takes a PIN, pairs a number,
 connects an account or changes a setting.
@@ -149,15 +149,20 @@ Muse, even one the relay signed.
 
 ## The PIN, harder to guess
 
-Five wrong PINs lock the approval page for 15 minutes, as before. Three of
-those lockouts within a day now **block approving from the phone** until you
-set a new PIN in Clips Kitty on the PC, and the page says so. Reminding and
-cancelling still work while it is blocked. Someone with a link and no PIN
-gets fifteen guesses, not one every quarter hour for ever.
+Five wrong PINs lock the approval page for 15 minutes, as before, and wrong
+PINs sent all at once count the same as one at a time. Three of those
+lockouts within a day now **block approving from the phone** until you set a
+new PIN in Clips Kitty on the PC, and the page says so (so does Muse, if you
+ask it for the link). Reminding and cancelling still work while it is
+blocked. Someone with a link and no PIN gets at most fifteen guesses in a
+day, where the 15-minute lock alone allowed twenty an hour.
 
 ## The key
 
 - It starts with `ckm_`. The relay keeps only its SHA-256, never the key.
+- Keep it like a password. Whoever has it can read your offers and get their
+  approval links, so they could remind or cancel, but approving still takes
+  your PIN.
 - It is accepted only in the `Authorization: Bearer` header, never in the
   address.
 - About 60 calls a minute per key; more get `429` with `Retry-After`.
@@ -179,7 +184,9 @@ specification, not tested against Muse itself:
   plain JSON, never a session) and the stateless 2026-07-28 revision, where
   each request names its version in `_meta` and the `MCP-Protocol-Version`,
   `Mcp-Method` and `Mcp-Name` headers must agree with the body. Server
-  Sent Events are not offered (GET `/mcp` answers 405).
+  Sent Events are not offered (GET `/mcp` answers 405), and neither are
+  JSON-RPC batches, which only 2025-03-26 allowed: a client that sends
+  several messages in one request is asked to send one at a time.
 - **OAuth or a header key.** The relay takes a key in a header. Meta
   describes custom connectors as keeping a credential in Muse's Secure
   Credentials Store, but not yet whether a remote MCP server can be given a
