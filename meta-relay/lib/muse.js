@@ -36,7 +36,7 @@
  */
 
 import { randomToken, sha256Hex, unseal } from "./crypto.js";
-import { addCommand, all, audit, iso, now, one, parse, prefsOf, run } from "./db.js";
+import { addCommand, all, audit, iso, now, one, parse, pinBlocked, prefsOf, run } from "./db.js";
 import { accountsFor, safeLink } from "./meta.js";
 
 export const CONNECTOR_VERSION = "1.0.0";
@@ -69,6 +69,12 @@ const INSTRUCTIONS =
   "offer to enter it for them. Cancel an offer only when the person clearly asks.";
 
 const NEVER_THE_PIN = "Never ask for the PIN or type it: the person enters it themselves on the approval page.";
+
+// What the tools say once wrong PINs have blocked approving from the phone
+// (db.js pinBlocked), so Muse never hands out a link as if it could approve.
+const BLOCKED =
+  "Approving from the phone is blocked after too many wrong PINs. The person sets a new PIN in Clips Kitty on " +
+  "their PC to unblock it. Until then the page can still set a reminder or cancel, but not approve.";
 
 class MuseError extends Error {
   constructor(status, code, message, headers = {}) {
@@ -536,11 +542,19 @@ async function listReady(env, { device }, args) {
     .filter((a) => a.created_at >= since && matches(a, match))
     .slice(0, limit)
     .map((a) => offerView(a, accounts, captions));
-  const data = { offers, pc_last_seen: device.last_seen ? iso(device.last_seen) : "" };
+  const blocked = await pinBlocked(env, device.device_id);
+  const data = { offers, pc_last_seen: device.last_seen ? iso(device.last_seen) : "", phone_approval_blocked: blocked };
   const lines = offers.map((o, i) => `${i + 1}. ${o.title}: ${o.summary || `${o.clips.length} clips`}. The link expires at ${o.expires_at}. (${o.approval_id})`);
+  // How these get published: the page and the PIN, unless the page can't approve them.
+  let how = "";
+  if (offers.some((o) => o.approve_from_phone)) {
+    how = blocked ? BLOCKED : "To publish, give the person the approval link (get_approval_link). They approve on that page with their own PIN.";
+  } else if (offers.length) {
+    how = "Approving from the phone is switched off on their PC, so they publish these from Clips Kitty on the PC.";
+  }
   const text = [
     offers.length ? `${offers.length === 1 ? "One offer is" : `${offers.length} offers are`} waiting for a decision:\n${lines.join("\n")}` : "No highlights are waiting for a decision.",
-    offers.length ? "To publish, give the person the approval link (get_approval_link). They approve on that page with their own PIN." : "",
+    how,
     pcLine(device),
   ].filter(Boolean).join("\n");
   return { data, text };
@@ -573,14 +587,20 @@ async function linkOf(env, device, approval) {
   const p = parse(approval.payload, {});
   const title = p.title || "your video";
   const state = stateOf(approval);
+  const blocked = await pinBlocked(env, device.device_id);
   let text = `This offer is ${CLOSED[state] || state}. Its page shows where it stands: ${url}`;
-  if (isOpen(approval)) {
-    text = approval.remote_ok
-      ? `Here is the approval link for ${title}: ${url}\nThe person opens it on their phone, ticks the clips and the places to post, and enters their own PIN there. ${NEVER_THE_PIN}`
-      : `Here is the link for ${title}: ${url}\nApproving from the phone is switched off on their PC, so the page only shows the clips.`;
+  if (isOpen(approval) && !approval.remote_ok) {
+    text = `Here is the link for ${title}: ${url}\nApproving from the phone is switched off on their PC, so the page only shows the clips.`;
+  } else if (isOpen(approval) && blocked) {
+    text = `Here is the link for ${title}: ${url}\n${BLOCKED}`;
+  } else if (isOpen(approval)) {
+    text = `Here is the approval link for ${title}: ${url}\nThe person opens it on their phone, ticks the clips and the places to post, and enters their own PIN there. ${NEVER_THE_PIN}`;
   }
   return {
-    data: { approval_id: approval.id, title, url, state, approve_from_phone: Boolean(approval.remote_ok), expires_at: iso(approval.expires_at), choices: [] },
+    data: {
+      approval_id: approval.id, title, url, state, approve_from_phone: Boolean(approval.remote_ok), phone_approval_blocked: blocked,
+      expires_at: iso(approval.expires_at), choices: [],
+    },
     text,
   };
 }
@@ -693,14 +713,17 @@ async function relayStatus(env, { device }) {
   const data = {
     pc_last_seen: device.last_seen ? iso(device.last_seen) : "",
     pin_set: Boolean(device.pin_hash),
+    phone_approval_blocked: await pinBlocked(env, device.device_id),
     whatsapp: { state: r ? r.state : "none", tail: r && r.wa_id ? r.wa_id.slice(-4) : "", messages_on: Boolean(prefsOf(device).whatsapp_enabled) },
     accounts,
     open_offers: open ? open.n : 0,
   };
   const connected = Object.entries(accounts).filter(([, a]) => a.connected).map(([p, a]) => `${p} (${a.name})`);
+  let pinLine = "No approval PIN is set yet, so nothing can be approved from the phone. The person sets one in Clips Kitty on their PC.";
+  if (data.pin_set) pinLine = data.phone_approval_blocked ? BLOCKED : "An approval PIN is set.";
   const text = [
     `${data.open_offers} offer${data.open_offers === 1 ? "" : "s"} waiting.`,
-    data.pin_set ? "An approval PIN is set." : "No approval PIN is set yet, so nothing can be approved from the phone. The person sets one in Clips Kitty on their PC.",
+    pinLine,
     connected.length ? `Connected: ${connected.join(", ")}.` : "No Instagram, Facebook or Threads account is connected yet.",
     pcLine(device),
   ].filter(Boolean).join("\n");

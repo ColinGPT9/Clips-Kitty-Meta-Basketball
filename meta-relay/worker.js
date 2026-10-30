@@ -47,7 +47,7 @@
  */
 
 import { b64url, canonical, hmacHex, hmacVerify, pinHash, randomId, randomToken, safeEqual, seal, sha256Hex, unseal } from "./lib/crypto.js";
-import { addCommand, all, audit, iso, now, one, parse, prefsOf, run } from "./lib/db.js";
+import { addCommand, all, audit, iso, now, one, parse, pinBlocked, prefsOf, run } from "./lib/db.js";
 import * as meta from "./lib/meta.js";
 import * as muse from "./lib/muse.js";
 import * as page from "./lib/page.js";
@@ -62,8 +62,6 @@ const PUBLISH_WINDOW = 24 * 3600; // after an approval, its publish steps are al
 const STATUS_TTL = 7 * 86400; // the page keeps showing results this long
 const PIN_MAX_FAILS = 5;
 const PIN_LOCK = 15 * 60;
-const PIN_BLOCK_AFTER = 3; // lockouts within PIN_BLOCK_SPAN that block phone approval until a new PIN
-const PIN_BLOCK_SPAN = 24 * 3600;
 const MAX_JSON = 1_500_000; // an offer with ten thumbnails
 const MAX_UPLOAD = 100 * 1024 * 1024;
 const PLATFORMS = ["instagram", "facebook", "threads"];
@@ -694,14 +692,24 @@ async function renderOffer(env, approval, token, error = "", statusCode = 200) {
 }
 
 /**
- * Phone approval is blocked once five wrong PINs have locked the page three
- * times within a day, and stays blocked until a new PIN is set on the PC
- * (setPin clears the lockouts). A guesser gets fifteen tries, not one every
- * quarter hour for ever.
+ * Once five tries are used up: the quarter-hour lock, noted for pinBlocked
+ * (lib/db.js). Only one try can start it, since the same write puts the
+ * count back to zero. The page to show when this lock is the one that
+ * blocks approving from the phone, else null.
  */
-async function pinBlocked(env, deviceId) {
-  const times = (await all(env, "SELECT at FROM pin_lockouts WHERE device_id = ? ORDER BY at", deviceId)).map((r) => r.at);
-  return times.some((t, i) => i >= PIN_BLOCK_AFTER - 1 && t - times[i - (PIN_BLOCK_AFTER - 1)] <= PIN_BLOCK_SPAN);
+async function lockPin(env, device, approval, token) {
+  const started = await run(env, "UPDATE devices SET pin_fails = 0, pin_locked_until = ? WHERE device_id = ? AND pin_fails >= ?",
+    now() + PIN_LOCK, device.device_id, PIN_MAX_FAILS);
+  if (!started) return null;
+  await run(env, "INSERT INTO pin_lockouts (device_id, at) VALUES (?, ?)", device.device_id, now());
+  if (!(await pinBlocked(env, device.device_id))) return null;
+  await audit(env, { device: device.device_id, approval: approval.id, actor: "relay", action: "pin_blocked" });
+  return renderOffer(env, approval, token, page.PIN_BLOCKED, 403);
+}
+
+function pinLocked(env, approval, token, until) {
+  const mins = Math.max(1, Math.ceil((until - now()) / 60));
+  return renderOffer(env, approval, token, `Too many wrong PINs. Try again in ${mins} minute${mins === 1 ? "" : "s"}.`, 429);
 }
 
 async function showOffer(env, token) {
@@ -765,26 +773,28 @@ async function decide(request, env, token) {
   if (!approval.remote_ok) return renderOffer(env, approval, token, "Approving from your phone is switched off on your PC.", 400);
   if (!device || !device.pin_hash) return renderOffer(env, approval, token, "Set an approval PIN in Clips Kitty first.", 400);
   if (await pinBlocked(env, device.device_id)) return renderOffer(env, approval, token, page.PIN_BLOCKED, 403);
-  if (device.pin_locked_until > now()) {
-    const mins = Math.ceil((device.pin_locked_until - now()) / 60);
-    return renderOffer(env, approval, token, `Too many wrong PINs. Try again in ${mins} minute${mins === 1 ? "" : "s"}.`, 429);
+  if (device.pin_locked_until > now()) return pinLocked(env, approval, token, device.pin_locked_until);
+  // A try is counted before its PIN is checked, in one write that also
+  // checks the lock. Counted after the check, tries sent all at once each
+  // read the count before any of them wrote it, so all of them were checked
+  // and the lock never started. This way each takes its own place in the
+  // count, and a burst gets the same five tries as one try at a time.
+  const counted = await run(env, "UPDATE devices SET pin_fails = pin_fails + 1 WHERE device_id = ? AND pin_fails < ? AND pin_locked_until <= ?",
+    device.device_id, PIN_MAX_FAILS, now());
+  if (!counted) {
+    // Five tries are already out. If none of them has started the lock yet
+    // (they are still being checked, or one was cut off), this one starts
+    // it, so the count can't stick at five with nothing locked.
+    const blocked = await lockPin(env, device, approval, token);
+    if (blocked) return blocked;
+    const fresh = await one(env, "SELECT pin_locked_until FROM devices WHERE device_id = ?", device.device_id);
+    return pinLocked(env, approval, token, fresh ? fresh.pin_locked_until : 0);
   }
   const pin = String(form.get("pin") || "");
   const good = /^\d{4,8}$/.test(pin) && (await safeEqual(await pinHash(pin, device.pin_salt), device.pin_hash));
   if (!good) {
-    const fails = device.pin_fails + 1;
     await audit(env, { device: device.device_id, approval: approval.id, actor: "phone", action: "pin_wrong" });
-    if (fails >= PIN_MAX_FAILS) {
-      await run(env, "UPDATE devices SET pin_fails = 0, pin_locked_until = ? WHERE device_id = ?", now() + PIN_LOCK, device.device_id);
-      await run(env, "INSERT INTO pin_lockouts (device_id, at) VALUES (?, ?)", device.device_id, now());
-      if (await pinBlocked(env, device.device_id)) {
-        await audit(env, { device: device.device_id, approval: approval.id, actor: "relay", action: "pin_blocked" });
-        return renderOffer(env, approval, token, page.PIN_BLOCKED, 403);
-      }
-    } else {
-      await run(env, "UPDATE devices SET pin_fails = ? WHERE device_id = ?", fails, device.device_id);
-    }
-    return renderOffer(env, approval, token, "That PIN is not right. Nothing was approved.", 403);
+    return (await lockPin(env, device, approval, token)) || renderOffer(env, approval, token, "That PIN is not right. Nothing was approved.", 403);
   }
   await run(env, "UPDATE devices SET pin_fails = 0 WHERE device_id = ?", device.device_id);
   if (form.get("confirm") !== "yes") return renderOffer(env, approval, token, "Tick the box to confirm the clips should be posted publicly.", 400);

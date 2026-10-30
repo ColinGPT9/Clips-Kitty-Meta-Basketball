@@ -51,6 +51,22 @@ export function prefsOf(device) {
   };
 }
 
+const PIN_BLOCK_AFTER = 3; // lockouts within PIN_BLOCK_SPAN that block phone approval until a new PIN
+const PIN_BLOCK_SPAN = 24 * 3600;
+
+/**
+ * Phone approval is blocked once five wrong PINs have locked the page three
+ * times within a day, and stays blocked until a new PIN is set on the PC
+ * (worker.js setPin clears the lockouts). A guesser gets at most fifteen
+ * tries in a day, where the quarter-hour lock alone allowed twenty an hour.
+ * Shared by the approval page (worker.js) and the Muse tools (muse.js),
+ * which say so rather than hand out a link as if it could approve.
+ */
+export async function pinBlocked(env, deviceId) {
+  const times = (await all(env, "SELECT at FROM pin_lockouts WHERE device_id = ? ORDER BY at", deviceId)).map((r) => r.at);
+  return times.some((t, i) => i >= PIN_BLOCK_AFTER - 1 && t - times[i - (PIN_BLOCK_AFTER - 1)] <= PIN_BLOCK_SPAN);
+}
+
 export function parse(text, fallback) {
   try {
     const v = JSON.parse(text);

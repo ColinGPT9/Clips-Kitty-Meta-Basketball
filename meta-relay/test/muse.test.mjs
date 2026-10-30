@@ -643,6 +643,80 @@ describe("the PIN", () => {
     assert.equal((await commands()).filter((c) => c.kind === "approve").length, 1);
   });
 
+  it("gives wrong PINs sent all at once the same five tries as one at a time", async () => {
+    await setUp();
+    await pc("POST", "/v1/notify", offer());
+    const token = tokenFrom(fake.messages.at(-1));
+    const csrf = csrfOf((await page(token)).text);
+    const fields = [["csrf", csrf], ["action", "approve"], ["clip", "11"], ["platform", "instagram"], ["confirm", "yes"]];
+    // Forty at the same moment. Counted after the check, each read the count
+    // before any of them wrote it: all forty were checked and nothing locked.
+    const answers = await Promise.all(Array.from({ length: 40 }, (_, i) => submit(token, [...fields, ["pin", String(5000 + i)]])));
+    assert.equal(audits("pin_wrong").length, 5);
+    assert.equal(answers.filter((a) => /That PIN is not right/.test(a.text)).length, 5);
+    const refused = answers.filter((a) => a.status === 429);
+    assert.equal(refused.length, 35);
+    assert.ok(refused.every((a) => /Too many wrong PINs\. Try again in 15 minutes/.test(a.text)));
+    assert.equal(env.DB.raw.prepare("SELECT COUNT(*) AS n FROM pin_lockouts").get().n, 1);
+    // Locked, so the right PIN waits its quarter hour too.
+    assert.equal((await submit(token, [...fields, ["pin", PIN]])).status, 429);
+    assert.equal((await commands()).filter((c) => c.kind === "approve").length, 0);
+  });
+
+  it("starts the lock when five counted tries never finished, so the count can't stick at five", async () => {
+    await setUp();
+    await pc("POST", "/v1/notify", offer());
+    const token = tokenFrom(fake.messages.at(-1));
+    const csrf = csrfOf((await page(token)).text);
+    const fields = [["csrf", csrf], ["action", "approve"], ["clip", "11"], ["platform", "instagram"], ["confirm", "yes"]];
+    env.DB.raw.prepare("UPDATE devices SET pin_fails = 5").run(); // counted, then cut off before their PIN was checked
+    let r = await submit(token, [...fields, ["pin", PIN]]);
+    assert.equal(r.status, 429);
+    assert.match(r.text, /Try again in 15 minutes/);
+    assert.equal(env.DB.raw.prepare("SELECT COUNT(*) AS n FROM pin_lockouts").get().n, 1);
+    env.DB.raw.prepare("UPDATE devices SET pin_locked_until = 0").run(); // the quarter hour passes
+    r = await submit(token, [...fields, ["pin", PIN]]);
+    assert.equal(r.status, 303);
+    assert.equal((await commands()).filter((c) => c.kind === "approve").length, 1);
+  });
+
+  it("tells Muse when phone approval is blocked, instead of handing out the link as if it could approve", async () => {
+    await setUp();
+    const key = await makeKey();
+    const sent = await pc("POST", "/v1/notify", offer());
+    const t = Math.floor(Date.now() / 1000);
+    for (const at of [t - 3600, t - 1800, t - 60]) {
+      env.DB.raw.prepare("INSERT INTO pin_lockouts (device_id, at) VALUES (?, ?)").run(DEVICE, at);
+    }
+    const link = await tool(key, "get_approval_link", { approval_id: sent.data.approval_id });
+    assert.equal(link.structuredContent.phone_approval_blocked, true);
+    assert.match(link.content[0].text, /blocked after too many wrong PINs\. The person sets a new PIN in Clips Kitty on their PC/);
+    assert.doesNotMatch(link.content[0].text, /enters their own PIN there/);
+    const ready = await tool(key, "list_ready_highlights");
+    assert.equal(ready.structuredContent.phone_approval_blocked, true);
+    assert.match(ready.content[0].text, /blocked after too many wrong PINs/);
+    assert.doesNotMatch(ready.content[0].text, /They approve on that page/);
+    const status = await tool(key, "relay_status");
+    assert.equal(status.structuredContent.phone_approval_blocked, true);
+    assert.match(status.content[0].text, /blocked after too many wrong PINs/);
+
+    await pc("POST", "/v1/pin", { pin: "5937" });
+    const after = await tool(key, "get_approval_link", { approval_id: sent.data.approval_id });
+    assert.equal(after.structuredContent.phone_approval_blocked, false);
+    assert.match(after.content[0].text, /enters their own PIN there/);
+    assert.match((await tool(key, "relay_status")).content[0].text, /An approval PIN is set\./);
+  });
+
+  it("tells Muse when approving from the phone is off, rather than pointing to a PIN", async () => {
+    await setUp();
+    const key = await makeKey();
+    await pc("POST", "/v1/notify", offer({ remote_approvals: false }));
+    const ready = await tool(key, "list_ready_highlights");
+    assert.equal(ready.structuredContent.offers[0].approve_from_phone, false);
+    assert.match(ready.content[0].text, /switched off on their PC, so they publish these from Clips Kitty on the PC/);
+    assert.doesNotMatch(ready.content[0].text, /own PIN/);
+  });
+
   it("counts only lockouts within a day of each other", async () => {
     await setUp();
     await pc("POST", "/v1/notify", offer());
