@@ -8,13 +8,15 @@ import WatchPlatformOptions, { type PlatformOverrides } from './WatchPlatformOpt
 import WatchSchedule, { type ScheduleValue } from './WatchSchedule'
 
 /** Whether WoopSocial can publish, and which accounts it has. Null while
- *  loading. Shared by the add form and each channel's settings, so both offer
- *  the same platforms. */
-export function useWoopAccounts(): { ready: boolean; connected: string[] } | null {
+ *  loading, and while `load` is false (nothing is asked of WoopSocial then).
+ *  Shared by the add form and each channel's settings, so both offer the
+ *  same platforms. */
+export function useWoopAccounts(load = true): { ready: boolean; connected: string[] } | null {
   const [woop, setWoop] = useState<{ ready: boolean; connected: string[] } | null>(null)
   useEffect(() => {
+    if (!load) return
     let live = true
-    const load = async (): Promise<void> => {
+    const fetchAccounts = async (): Promise<void> => {
       try {
         const status = await api.woopSocialStatus()
         const ready = status.enabled && status.has_key
@@ -24,23 +26,31 @@ export function useWoopAccounts(): { ready: boolean; connected: string[] } | nul
         if (live) setWoop({ ready: false, connected: [] })
       }
     }
-    void load()
+    void fetchAccounts()
     return () => {
       live = false
     }
-  }, [])
+  }, [load])
   return woop
 }
 
+/** This edition posts through Meta's own Instagram, Facebook and Threads,
+ *  approved on the phone, so these two are all a channel is offered. */
 const MODES: { id: WatchPublish['mode']; label: string; hint: string }[] = [
-  { id: 'off', label: 'Off', hint: 'Only make the clips.' },
-  { id: 'ask', label: 'Ask first', hint: 'Make the clips, then wait for you to press Publish.' },
   {
-    id: 'auto',
-    label: 'Automatic (hands-off)',
-    hint: 'Publish as soon as the clips are made. Anything that fails is tried again, so it keeps going with nobody at the PC.'
-  }
+    id: 'phone',
+    label: 'Ask me on my phone',
+    hint: 'You approve from your Muse agent or WhatsApp. Nothing posts without your PIN.'
+  },
+  { id: 'off', label: 'Only clip', hint: 'Only make the clips.' }
 ]
+
+/** The WoopSocial modes, for a channel set up with one before this edition.
+ *  Still honoured by the engine, never offered here. */
+const WOOPSOCIAL_MODES: Partial<Record<WatchPublish['mode'], string>> = {
+  ask: 'Ask first',
+  auto: 'Automatic'
+}
 
 const BACKLOG: { id: Watch['backlog']; label: string }[] = [
   { id: 'newest', label: 'Only the newest one' },
@@ -52,9 +62,13 @@ const BACKLOG: { id: Watch['backlog']; label: string }[] = [
 /** What happens to a watched channel's clips, and to videos it finds late.
  *
  *  Configured once per channel, so nobody fills in a publish form for every
- *  video. The platforms offered are the ones actually connected to
- *  WoopSocial, not a fixed list: a box for an account that is not there would
- *  only produce a "skipped" row later. */
+ *  video. A channel's clips go to the phone, or are only made: where they are
+ *  posted is chosen on the approval page, and in Settings → Notifications &
+ *  Remote Approval. A channel set up with a WoopSocial mode before this
+ *  edition keeps its WoopSocial settings below, until it is switched. The
+ *  platforms offered there are the ones actually connected to WoopSocial,
+ *  not a fixed list: a box for an account that is not there would only
+ *  produce a "skipped" row later. */
 export default function WatchPublishSettings({
   watch,
   onSaved
@@ -97,7 +111,10 @@ export default function WatchPublishSettings({
   )
   const [backlog, setBacklog] = useState(watch.backlog)
   const [minMinutes, setMinMinutes] = useState(watch.min_minutes)
-  const woop = useWoopAccounts()
+  // Set up with WoopSocial before this edition: its settings stay in view,
+  // and are saved as they are, until the channel is switched to one of MODES.
+  const legacy = mode === 'ask' || mode === 'auto'
+  const woop = useWoopAccounts(legacy)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
@@ -173,10 +190,22 @@ export default function WatchPublishSettings({
             </label>
           ))}
         </div>
-        <p className="text-xs text-muted">{t(MODES.find((m) => m.id === mode)?.hint ?? '')}</p>
+        {legacy ? (
+          <p className="text-xs text-warn">
+            {t('This channel still posts through WoopSocial')} ({t(WOOPSOCIAL_MODES[mode] ?? '')}).{' '}
+            {t('Choose Ask me on my phone to approve its clips from your phone instead.')}
+          </p>
+        ) : (
+          <p className="text-xs text-muted">{t(MODES.find((m) => m.id === mode)?.hint ?? '')}</p>
+        )}
+        {mode === 'phone' && (
+          <p className="text-xs text-muted">
+            {t('Where they are posted is chosen on the approval page and in Settings → Notifications & Remote Approval.')}
+          </p>
+        )}
       </div>
 
-      {destinations.length > 0 && (
+      {legacy && destinations.length > 0 && (
         <label className="block text-sm space-y-1">
           <span className="label block">{t('Send links to Discord')}</span>
           <select
@@ -194,7 +223,7 @@ export default function WatchPublishSettings({
         </label>
       )}
 
-      {mode !== 'off' && (
+      {legacy && (
         <>
           {woop && !woop.ready ? (
             <div className="text-sm text-warn flex items-center gap-3 flex-wrap">

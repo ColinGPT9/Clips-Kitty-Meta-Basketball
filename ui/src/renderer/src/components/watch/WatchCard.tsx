@@ -9,7 +9,15 @@ import { t } from '../../lib/i18n'
 export const WATCH_PLATFORM_LABEL: Record<string, string> = {
   youtube: 'YouTube',
   twitch: 'Twitch',
-  kick: 'Kick'
+  kick: 'Kick',
+  folder: 'Folder'
+}
+
+/** What a watch is called on its card. A folder goes by its own name, never
+ *  its full path, which names whoever's PC it is on. */
+export function watchTitle(watch: Pick<Watch, 'platform' | 'name' | 'channel_key'>): string {
+  if (watch.platform !== 'folder') return watch.name || watch.channel_key
+  return watch.name || watch.channel_key.split(/[\\/]/).filter(Boolean).pop() || t('Folder')
 }
 
 /** How many videos the history shows before "show more". */
@@ -153,14 +161,14 @@ export default function WatchCard({
   const shown = showAll ? visible : visible.slice(0, SHOWN)
 
   return (
-    <section ref={cardRef} className="card space-y-3" aria-label={watch.name}>
+    <section ref={cardRef} className="card space-y-3" aria-label={watchTitle(watch)}>
       <div className="flex items-start gap-3 flex-wrap">
         <span className="text-xs font-semibold uppercase tracking-wide bg-raised rounded px-2 py-1 shrink-0">
-          {WATCH_PLATFORM_LABEL[watch.platform] ?? watch.platform}
+          {t(WATCH_PLATFORM_LABEL[watch.platform] ?? watch.platform)}
         </span>
         <div className="min-w-0">
           <h3 className="font-semibold truncate flex items-center gap-2">
-            {watch.name || watch.channel_key}
+            {watchTitle(watch)}
             {automation.enabled && watch.enabled && (
               <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-success bg-success/10 rounded-full px-2 py-0.5">
                 <span className="size-1.5 rounded-full bg-success animate-pulse" aria-hidden />
@@ -212,7 +220,8 @@ export default function WatchCard({
 
       {watch.last_error && (
         <p className="text-sm text-error">
-          {t('Could not check this channel:')} {watch.last_error}
+          {watch.platform === 'folder' ? t('Could not check this folder:') : t('Could not check this channel:')}{' '}
+          {watch.last_error}
           {watch.platform === 'kick' &&
             ` ${t('Kick has no official way to list videos, so this can stop working without notice.')}`}
         </p>
@@ -222,7 +231,9 @@ export default function WatchCard({
 
       {openSetup && (
         <p className="text-sm text-accent">
-          {t('Set it up now. Nothing is clipped until the channel posts something new.')}
+          {watch.platform === 'folder'
+            ? t('Set it up now. Nothing is clipped until a new video is added to the folder.')
+            : t('Set it up now. Nothing is clipped until the channel posts something new.')}
         </p>
       )}
       <div className="flex gap-2 flex-wrap">
@@ -285,7 +296,9 @@ export default function WatchCard({
         ) : visible.length === 0 ? (
           <p className="text-sm text-muted">
             {earlier > 0
-              ? t('Nothing new yet. New videos from this channel will show up here.')
+              ? watch.platform === 'folder'
+                ? t('Nothing new yet. New videos added to this folder will show up here.')
+                : t('Nothing new yet. New videos from this channel will show up here.')
               : t('Nothing found yet.')}
           </p>
         ) : (
@@ -323,7 +336,13 @@ export default function WatchCard({
 }
 
 function publishModeLabel(mode: Watch['publish']['mode']): string {
-  return mode === 'auto' ? 'Automatic' : mode === 'ask' ? 'Ask first' : 'Off'
+  return mode === 'phone'
+    ? 'Ask me on my phone'
+    : mode === 'auto'
+      ? 'Automatic'
+      : mode === 'ask'
+        ? 'Ask first'
+        : 'Only clip'
 }
 
 function statusText(item: WatchItem): { text: string; tone: string } {
@@ -421,13 +440,19 @@ function ItemRow({
     <div className="rounded-lg bg-raised/40 px-3 py-2 space-y-1.5">
       <div className="flex items-start gap-3 flex-wrap">
         <div className="min-w-0 flex-1">
-          <button
-            className="text-sm font-medium text-left hover:text-accent truncate max-w-full block"
-            title={item.url}
-            onClick={() => void window.studio?.openExternal(item.url)}
-          >
-            {item.title || item.video_id}
-          </button>
+          {item.platform === 'folder' ? (
+            // A file on this PC: nothing to open in a browser, and its path
+            // is not shown.
+            <p className="text-sm font-medium truncate max-w-full">{item.title || item.video_id}</p>
+          ) : (
+            <button
+              className="text-sm font-medium text-left hover:text-accent truncate max-w-full block"
+              title={item.url}
+              onClick={() => void window.studio?.openExternal(item.url)}
+            >
+              {item.title || item.video_id}
+            </button>
+          )}
           <p className="text-xs text-muted">
             {when ? relative(when) : ''}
             <span className={`ml-2 ${tone}`}>{t(text)}</span>
@@ -510,6 +535,11 @@ function ItemRow({
           )}
           {item.publish_state === 'off' && deliveries.length === 0 && (
             <span className="text-muted">{t('Not published.')}</span>
+          )}
+          {/* Approved and posted from the phone; once anything is posted,
+              the platform counts below say so. */}
+          {item.publish_state === 'phone' && !item.publish_error && deliveries.length === 0 && (
+            <span className="text-accent">{t('Sent to your phone for approval.')}</span>
           )}
           {item.publish_error && <p className="text-warn">{item.publish_error}</p>}
           {deliveries.length > 0 && (

@@ -25,11 +25,12 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from core import queue
-from core.binaries import ffmpeg, ffprobe
+from core.binaries import ffmpeg
 from core.paths import discard, picked_file, safe_name
 from core.state import StateDB
 from server.events import broadcaster
 from server.jobs import Worker
+from sources import local_file
 
 # Version of the supported API described in docs/API.md. Bumped only when a
 # supported endpoint changes shape, never for additions.
@@ -206,10 +207,11 @@ class BrandingIn(BaseModel):
 
 # What the two "import a file from this computer" endpoints will accept. Kept
 # next to the models that carry those paths so the two stay in step, and passed
-# to picked_file() so a path is rejected before anything opens it.
+# to picked_file() so a path is rejected before anything opens it. The video
+# list lives with the rest of what a file from this computer is
+# (sources/local_file.py), where a watched folder reads it too.
 _IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
-_VIDEO_SUFFIXES = (".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi", ".flv", ".ts", ".mpg",
-                   ".mpeg", ".wmv", ".m2ts", ".mts")
+_VIDEO_SUFFIXES = local_file.VIDEO_SUFFIXES
 
 
 class BrandingAssetIn(BaseModel):
@@ -1041,9 +1043,6 @@ def create_app(config: dict, settings_path: Path) -> FastAPI:
         anywhere. The user's title/creator/platform fill the same fields a
         downloaded video would get, so it lands in the library and the
         Creators tab exactly like a processed URL."""
-        import hashlib
-        import subprocess as sp
-
         # Normalised and checked before anything reads it — see picked_file().
         # The path comes from a native file dialog, so a rejection here means
         # the request did not come from the app. It hands back the resolved
@@ -1054,57 +1053,17 @@ def create_app(config: dict, settings_path: Path) -> FastAPI:
             raise HTTPException(400, f"not a video file this app can open: {body.path}")
         src, _suffix, src_stat = picked
 
-        # Must contain a video stream (catches audio files / random files).
-        probe = sp.run(
-            [ffprobe(), "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=codec_name", "-of", "csv=p=0", str(src)],
-            capture_output=True, text=True,
-        )
-        if probe.returncode != 0 or not probe.stdout.strip():
-            raise HTTPException(400, "that file doesn't look like a video")
-
-        # Length, while we already have the file open. Local files are the one
-        # path where the queue can know a video's duration before it runs, and
-        # duration is what its time estimate scales by.
-        seconds = 0.0
-        try:
-            dur = sp.run(
-                [ffprobe(), "-v", "error", "-show_entries", "format=duration",
-                 "-of", "csv=p=0", str(src)],
-                capture_output=True, text=True,
-            )
-            seconds = float(dur.stdout.strip() or 0)
-        except (ValueError, OSError):
-            pass  # only costs a less precise estimate
-
-        # usedforsecurity=False because this is a naming scheme, not a defence:
-        # it turns a path into a stable short id so re-importing the same file
-        # reuses its downloads/ entry. Nothing trusts it, and collisions cost a
-        # duplicate import rather than anything worse. Saying so explicitly
-        # keeps the security scanners from reading it as a weak digest.
-        #
+        # The video stream check, the length, the id and the copy into
+        # downloads/, shared with watched folders (sources/local_file.py), so
+        # a file added here and found in a watched folder is one video.
         # src is already resolved and src_stat already taken, both by
-        # picked_file() — re-doing either here would be a second unchecked
-        # look at the same user-supplied string.
-        vid = "local_" + hashlib.md5(
-            f"{src}|{src_stat.st_size}|{int(src_stat.st_mtime)}".encode(),
-            usedforsecurity=False,
-        ).hexdigest()[:12]
-        dest = data_dir / "downloads" / f"{vid}.mp4"
-        dest.parent.mkdir(parents=True, exist_ok=True)
-
-        # H.264, H.265, AV1 and VP9 are stream-copied into the pipeline's mp4
-        # layout, which takes seconds; the job converts the slow three to
-        # H.264 where the window can show it. Anything else (ProRes, old AVI
-        # codecs) is converted here. Never left half-written: see
-        # import_local_source, and #122 for what a half-written copy cost.
-        from video.encoding import import_local_source
-
-        if not import_local_source(src, dest, probe.stdout.strip()):
-            raise HTTPException(
-                400,
-                "couldn't convert this file — export it as MP4 (H.264) and try again",
-            )
+        # picked_file() — re-doing either would be a second unchecked look at
+        # the same user-supplied string.
+        try:
+            imported = local_file.bring_in(src, src_stat, data_dir / "downloads")
+        except local_file.NotImported as e:
+            raise HTTPException(400, str(e)) from e
+        vid, seconds = imported.video_id, imported.seconds
 
         title = body.title.strip() or src.stem
         platform = body.platform if body.platform in ("youtube", "twitch", "kick") else "youtube"

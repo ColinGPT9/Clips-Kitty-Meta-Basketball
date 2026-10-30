@@ -5,9 +5,13 @@ video becomes at most one job however it is seen (twice in one feed, by two
 watches, after a restart, after a title change, or after being clipped by
 hand), nothing live is handed to the downloader, content missed while the app
 was closed is never silently lost, and nothing is published unless asked.
+The same holds for a watched folder, whose file is copied in once and goes by
+the id a file added by hand gets, and for a watch whose clips go to the phone,
+which never publishes through WoopSocial.
 """
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,8 +28,12 @@ from fastapi.testclient import TestClient
 from campaigns import queue as campaign_queue
 from core import queue
 from core.state import StateDB
+from remote_approval import notifier, store
+from remote_approval import settings as ra_settings
 from server import automation
+from sources import folder_feed, local_file
 from sources.channel_feed import Channel, NewSourceVideo, Readiness
+from sources.folder_feed import FolderFeed
 
 UC = "UC0123456789abcdefABCDEF"
 START = 1_800_000_000.0
@@ -79,6 +87,24 @@ class FakeBroadcaster:
         self.events.append(event)
 
 
+class FakeImports:
+    """The copy of a folder's file into downloads/ (sources/local_file.bring_in),
+    without FFmpeg: it writes the copy and remembers each file brought in."""
+
+    def __init__(self):
+        self.calls: list[str] = []
+        self.error: Exception | None = None
+
+    def __call__(self, src, st, downloads):
+        if self.error:
+            raise self.error
+        self.calls.append(str(src))
+        vid = local_file.video_id(src, st)
+        downloads.mkdir(parents=True, exist_ok=True)
+        (downloads / f"{vid}.mp4").write_bytes(b"the copy")
+        return local_file.Imported(vid, 3600.0)
+
+
 class Env:
     def __init__(self, tmp_path, feed=None, options_from=dict):
         self.now = START
@@ -89,11 +115,16 @@ class Env:
         self.publish_calls = 0
         self.publish_error: Exception | None = None
         self.data_dir = tmp_path
+        # Watched folders on the test's clock, with ffprobe and the copy stood in for.
+        self.probed = {"codec": "h264", "width": 1920, "height": 1080, "duration": 3600.0}
+        self.imports = FakeImports()
+        folders = FolderFeed(clock=lambda: self.now, probe=lambda path: dict(self.probed),
+                             importer=self.imports)
         app = FastAPI()
         self.watcher = automation.install(
             app, db=self.db, worker=self.worker, broadcaster=FakeBroadcaster(),
             options_from=options_from, feed=self.feed, clock=lambda: self.now,
-            interval_minutes=15, publisher=self.publisher, data_dir=tmp_path,
+            interval_minutes=15, publisher=self.publisher, data_dir=tmp_path, folders=folders,
         )
         self.client = TestClient(app, base_url="http://127.0.0.1")
 
@@ -1583,3 +1614,425 @@ def test_a_watch_keeps_its_rater_through_an_autosave(tmp_path, install_plugin):
     # Options sent without them replace the watch's: that is how they are turned off.
     response = e.client.patch(f"/automation/watches/{watch['id']}", json={"options": {"captions": True}})
     assert response.json()["options"] == {"captions": True}
+
+
+# ---- Check now ---------------------------------------------------------------------
+
+
+def vod(number, channel="somestreamer", title="Last night's stream"):
+    """A past broadcast as a Twitch channel's listing gives it: no date."""
+    return NewSourceVideo("twitch", channel, f"tw_{number}", f"https://www.twitch.tv/videos/{number}", title, 0.0)
+
+
+def test_check_now_looks_again_at_a_vod_whose_stream_just_ended(env):
+    watch = env.add("somestreamer", platform="twitch")
+    env.watcher.tick()
+    url = "https://www.twitch.tv/videos/2882100152"
+    env.feed.ready[url] = Readiness("not_yet", "Still live or about to go live. Waiting for it to finish.")
+    env.feed.listings["somestreamer"] = [vod(2882100152)]
+    env.later()
+    assert env.item("tw_2882100152")["status"] == "waiting_for_video"
+    env.feed.ready[url] = Readiness("ready", duration=4 * 3600)  # the stream ended
+    env.later(60)
+    assert env.item("tw_2882100152")["status"] == "waiting_for_video"  # its next look is 15 minutes away
+    assert env.client.post(f"/automation/watches/{watch['id']}/check").status_code == 200
+    env.later(5)
+    assert env.item("tw_2882100152")["status"] == "queued"
+    assert [j["video_id"] for j in env.jobs()] == ["tw_2882100152"]
+
+
+def test_check_now_never_queues_a_vod_that_is_still_live(env):
+    watch = env.add("somestreamer", platform="twitch")
+    env.watcher.tick()
+    url = "https://www.twitch.tv/videos/2882100153"
+    env.feed.ready[url] = Readiness("not_yet", "Still live or about to go live. Waiting for it to finish.")
+    env.feed.listings["somestreamer"] = [vod(2882100153)]
+    env.later()
+    asked = env.feed.readiness_calls.count(url)
+    env.client.post(f"/automation/watches/{watch['id']}/check")
+    env.later(5)
+    assert env.feed.readiness_calls.count(url) == asked + 1  # looked at again, as asked
+    assert env.item("tw_2882100153")["status"] == "waiting_for_video"
+    assert env.jobs() == []
+
+
+def test_check_now_leaves_other_watches_videos_to_their_own_time(env):
+    first = env.add("somestreamer", platform="twitch")
+    env.add("otherstreamer", platform="twitch")
+    env.watcher.tick()
+    for key, number in (("somestreamer", 1), ("otherstreamer", 2)):
+        env.feed.ready[f"https://www.twitch.tv/videos/{number}"] = Readiness("not_yet", "Still live.")
+        env.feed.listings[key] = [vod(number, key)]
+    env.later()
+    env.feed.ready = {}  # both streams ended
+    env.client.post(f"/automation/watches/{first['id']}/check")
+    env.later(5)
+    assert env.item("tw_1")["status"] == "queued"
+    assert env.item("tw_2")["status"] == "waiting_for_video"
+
+
+# ---- Ask me on my phone ----------------------------------------------------------
+# A watch can hand its clips to remote approval (remote_approval/): offered on the
+# phone when the job finishes and posted from there with the PIN, never through
+# WoopSocial. A watch that posts to Meta through WoopSocial is never offered as well.
+
+
+def phone_on(env, **settings):
+    """WhatsApp notifications and remote approval switched on, as Settings would."""
+    env.run(lambda d: ra_settings.save(d, {"whatsapp_enabled": True, "relay_url": "https://relay.test",
+                                           "remote_approvals": True, **settings}))
+
+
+def clips_on_disk(env, video_id="newnewnew01", n=2):
+    """The job finished with clip files on disk, which is what an offer is made of."""
+    env.finish(video_id)
+    folder = env.data_dir / "clips" / video_id
+    folder.mkdir(parents=True, exist_ok=True)
+
+    def go(d):
+        for i in range(n):
+            path = folder / f"clip{i}.mp4"
+            path.write_bytes(os.urandom(2048))
+            d.add_clip(video_id, i * 10.0, i * 10.0 + 8, 90 - i, f"hook {i}", path=str(path))
+    env.run(go)
+
+
+def announced(env, video_id="newnewnew01"):
+    """What the worker does as the job ends (server/jobs.py _announce): the offer, if any."""
+    def go(d):
+        job = d.conn.execute("SELECT * FROM jobs WHERE video_id = ? ORDER BY id DESC", (video_id,)).fetchone()
+        review_id = notifier.on_job_finished(d, job, "done")
+        return store.get_review(d, review_id) if review_id else None
+    return env.run(go)
+
+
+def test_a_phone_watchs_video_is_offered_whatever_kind_it_is(env):
+    phone_on(env)
+    assert env.run(lambda d: ra_settings.load(d)["basketball_only"]) is True  # as it ships
+    with_publish_mode(env, "phone")
+    clips_on_disk(env)
+    review = announced(env)
+    assert review is not None and len(review["clips"]) == 2  # a plain video, offered all the same
+    assert review["summary"]["kind"] == "video"
+
+
+def test_a_phone_watch_never_publishes_from_here(env):
+    phone_on(env)
+    with_publish_mode(env, "phone")
+    clips_on_disk(env)
+    assert announced(env) is not None
+    env.later(5)
+    env.later(5)
+    item = env.item("newnewnew01")
+    assert (item["publish_state"], item["publish_error"]) == ("phone", "")
+    assert env.publish_calls == 0
+    assert "Clips of “Video newnewnew01” are ready. Sent to your phone for approval." in feed_lines(env)
+    # Publish from the Watch page is refused, and a restart's leftover is not sent either.
+    assert env.client.post(f"/automation/items/{item['id']}/publish").status_code == 409
+    env.run(lambda d: d.set_watch_item(item["id"], publish_state="publishing"))
+    env.later(5)
+    assert env.publish_calls == 0 and env.item("newnewnew01")["publish_state"] == "phone"
+
+
+def test_a_phone_watch_says_so_when_nothing_could_reach_the_phone(env):
+    with_publish_mode(env, "phone")  # WhatsApp never switched on
+    clips_on_disk(env)
+    assert announced(env) is None
+    env.later(5)
+    item = env.item("newnewnew01")
+    assert item["publish_state"] == "phone" and item["publish_error"].startswith("Nothing was sent to your phone.")
+    assert not any("Sent to your phone" in line for line in feed_lines(env))
+    assert env.publish_calls == 0
+
+
+def test_a_phone_watch_never_says_clips_were_sent_when_no_offer_was_made(env):
+    """Settings allow an offer, but none was made: here every clip is posted
+    on Instagram, Facebook and Threads already, so there is nothing to offer."""
+    phone_on(env)
+    with_publish_mode(env, "phone")
+    clips_on_disk(env)
+
+    def posted_everywhere(d):
+        for clip in d.clips_for_video("newnewnew01"):
+            for platform in ra_settings.PLATFORMS:
+                d.record_clip_publish(clip["id"], platform, {
+                    "provider": "woopsocial", "video_id": "newnewnew01", "start_s": clip["start_s"],
+                    "end_s": clip["end_s"], "state": "published"})
+    env.run(posted_everywhere)
+    assert announced(env) is None
+    env.later(5)
+    assert env.item("newnewnew01")["publish_state"] == ""  # its offer may still be on its way
+    env.later(automation.OFFER_WAIT_SECONDS)
+    item = env.item("newnewnew01")
+    assert (item["publish_state"], item["publish_error"]) == ("phone", "Nothing was sent to your phone for this video.")
+    assert not any("Sent to your phone" in line for line in feed_lines(env))
+    assert env.publish_calls == 0
+
+
+def test_a_phone_watch_says_what_was_sent_whatever_settings_say_now(env):
+    """The offer made when the job finished is what the phone got. WhatsApp
+    switched off since then doesn't unsend it."""
+    phone_on(env)
+    with_publish_mode(env, "phone")
+    clips_on_disk(env)
+    assert announced(env) is not None
+    env.run(lambda d: ra_settings.save(d, {"whatsapp_enabled": False}))
+    env.later(5)
+    item = env.item("newnewnew01")
+    assert (item["publish_state"], item["publish_error"]) == ("phone", "")
+    assert "Clips of “Video newnewnew01” are ready. Sent to your phone for approval." in feed_lines(env)
+
+
+@pytest.mark.parametrize("platforms, offered", [
+    (["instagram"], False),
+    (["youtube", "facebook"], False),
+    (["threads"], False),
+    (["youtube", "tiktok"], True),
+])
+def test_a_watch_posting_to_meta_through_woopsocial_is_never_offered_too(env, platforms, offered):
+    phone_on(env, basketball_only=False)  # every video offered, so only the watch can say no
+    watch = watched(env)
+    env.client.patch(f"/automation/watches/{watch['id']}", json={"publish": {"mode": "auto", "platforms": platforms}})
+    env.feed.listings[UC] = [yt("newnewnew01")]
+    env.later()
+    clips_on_disk(env)
+    assert (announced(env) is not None) is offered
+
+
+def test_a_video_a_phone_watch_noted_but_clipped_by_hand_follows_settings(env):
+    """The watch's choice is for the jobs it queued: the same video pasted as
+    a link is an ordinary job, and Settings decide."""
+    phone_on(env)
+    watch = watched(env, yt("aaaaaaaaaaa"))  # on the channel before watching started
+    env.client.patch(f"/automation/watches/{watch['id']}", json={"publish": {"mode": "phone"}})
+    env.run(lambda d: queue.enqueue(d, "process", {"url": "https://www.youtube.com/watch?v=aaaaaaaaaaa"},
+                                    video_id="aaaaaaaaaaa"))
+    clips_on_disk(env, "aaaaaaaaaaa")
+    assert announced(env, "aaaaaaaaaaa") is None  # basketball only, as Settings say
+
+
+# ---- watched folders ---------------------------------------------------------------
+# A Google Drive for desktop, Dropbox or OneDrive folder a team drops videos into
+# (sources/folder_feed.py): looked at on every tick, a file counts once it has
+# finished arriving, and it is copied in and queued as a file added by hand is.
+
+
+@pytest.fixture
+def drive(tmp_path_factory):
+    """The team's shared folder, outside the app's data folder."""
+    return tmp_path_factory.mktemp("drive")
+
+
+def add_folder(env, folder, **body):
+    response = env.client.post("/automation/watches", json={"platform": "folder", "channel": str(folder), **body})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def drop(folder, name, data=b"the whole game", at=None):
+    path = folder / name
+    path.write_bytes(data)
+    if at is not None:
+        os.utime(path, (at, at))
+    return path
+
+
+def id_of(path) -> str:
+    """What /videos/local calls this file."""
+    real = path.resolve()
+    return local_file.video_id(real, real.stat())
+
+
+def arrive(env):
+    """Two looks a minute apart: a dropped file seen, then seen unchanged."""
+    env.later(automation.WATCH_TICK_SECONDS)
+    env.later(folder_feed.SETTLE_SECONDS)
+
+
+def test_adding_a_folder_never_clips_what_is_already_in_it(env, drive):
+    drop(drive, "one.mp4")
+    drop(drive, "two.mov")
+    watch = add_folder(env, drive)
+    assert (watch["platform"], watch["name"]) == ("folder", drive.name)
+    env.watcher.tick()
+    arrive(env)
+    arrive(env)
+    assert env.jobs() == [] and env.imports.calls == []
+    assert [i["status"] for i in env.items()] == ["earlier", "earlier"]
+
+
+def test_a_file_dropped_in_is_copied_in_once_and_queued_by_its_id(env, drive):
+    add_folder(env, drive)
+    env.watcher.tick()
+    dropped = drop(drive, "Some Team vs Other Team.mp4")
+    env.later(automation.WATCH_TICK_SECONDS)
+    assert env.items() == [] and env.jobs() == []  # seen, maybe still arriving
+    env.later(folder_feed.SETTLE_SECONDS)
+    vid = id_of(dropped)
+    jobs = env.jobs()
+    assert [j["video_id"] for j in jobs] == [vid]
+    payload = json.loads(jobs[0]["payload"])
+    assert payload["url"] == f"local:{vid}" and payload["origin"] == "watch"
+    assert env.imports.calls == [str(dropped.resolve())]
+    assert (env.data_dir / "downloads" / f"{vid}.mp4").is_file()
+    item = env.item(vid)
+    assert (item["status"], item["platform"], item["title"]) == ("queued", "folder", "Some Team vs Other Team")
+    for _ in range(3):
+        env.later(automation.WATCH_TICK_SECONDS)
+    assert len(env.jobs()) == 1 and len(env.imports.calls) == 1
+    assert dropped.read_bytes() == b"the whole game"  # only ever read
+    events = activity(env)["events"]
+    assert {"found", "queued"} <= {e["kind"] for e in events}
+    # A path on this PC is never offered as a link, on any line.
+    assert not any("url" in e for e in events)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="a file open for writing is Windows' own answer")
+def test_a_file_still_being_copied_in_waits_however_long_the_copy_is_paused(env, drive):
+    """A copy sets the file's full size first, and a paused one stops its
+    time too: size and time alone would call it finished."""
+    add_folder(env, drive)
+    env.watcher.tick()
+    dropped = drop(drive, "game.mp4")
+    with open(dropped, "ab"):  # the program copying it in still has it open
+        arrive(env)
+        env.later(automation.FOLDER_RECHECK_SECONDS)
+        item = env.item(id_of(dropped))
+        assert (item["status"], item["reason"]) == ("waiting_for_video", folder_feed.STILL_COPYING)
+        assert env.imports.calls == [] and env.jobs() == []
+    env.later(automation.FOLDER_RECHECK_SECONDS)
+    assert env.item(id_of(dropped))["status"] == "queued"
+    assert env.imports.calls == [str(dropped.resolve())]
+
+
+def test_a_copy_the_disk_refuses_is_said_on_the_video_and_the_watcher_carries_on(env, drive):
+    add_folder(env, drive)
+    env.watcher.tick()
+    dropped = drop(drive, "game.mp4")
+    env.imports.error = OSError(28, "There is not enough space on the disk", str(dropped))
+    arrive(env)  # raised out of the tick before, every tick, holding up every other watch
+    item = env.item(id_of(dropped))
+    assert (item["status"], item["reason"]) == (
+        "error", "Couldn't copy it into Clips Kitty: There is not enough space on the disk")
+    assert env.jobs() == []
+    assert not any(str(drive) in line for line in feed_lines(env))
+
+
+def test_a_file_already_added_by_hand_is_not_clipped_again(env, drive):
+    add_folder(env, drive)
+    env.watcher.tick()
+    dropped = drop(drive, "game.mp4")
+    vid = id_of(dropped)
+    env.run(lambda d: (d.upsert_video(vid), d.set_video_status(vid, "done")))  # what /videos/local left
+    arrive(env)
+    assert env.jobs() == [] and env.imports.calls == []
+    assert "Already clipped" in env.item(vid)["reason"]
+
+
+def test_a_file_too_short_to_clip_is_set_aside(env, drive):
+    add_folder(env, drive)
+    env.watcher.tick()
+    env.probed["duration"] = 50.0
+    dropped = drop(drive, "clip.mp4")
+    arrive(env)
+    item = env.item(id_of(dropped))
+    assert (item["status"], item["reason"]) == ("skipped", "Shorter than 3 minutes.")
+    assert env.jobs() == []
+
+
+def test_a_file_that_changed_while_waiting_for_room_is_not_copied_under_its_old_id(env, drive):
+    add_folder(env, drive)
+    env.watcher.tick()
+    for n in range(queue.MAX_ACTIVE):
+        env.run(lambda d, n=n: queue.enqueue(d, "process", {"url": f"u{n}"}, video_id=f"other{n}"))
+    dropped = drop(drive, "game.mp4", b"first cut")
+    arrive(env)
+    vid = id_of(dropped)
+    assert env.item(vid)["status"] == "waiting_for_queue"
+    final = drop(drive, "game.mp4", b"the final cut, longer")  # exported again over it
+    env.run(lambda d: d.finish_job(d.job_for_video("other0", ("queued",))["id"], "done"))
+    env.later(5)
+    item = env.item(vid)
+    assert (item["status"], item["reason"]) == ("skipped", folder_feed.CHANGED)
+    assert env.imports.calls == []
+    arrive(env)  # the final cut is a video of its own
+    assert env.item(id_of(final))["status"] == "queued"
+    assert env.imports.calls == [str(final.resolve())]
+
+
+def test_videos_added_while_clips_kitty_was_closed_follow_the_catch_up_rule(env, drive, tmp_path):
+    add_folder(env, drive)
+    env.watcher.tick()
+    first = drop(drive, "first.mp4", at=START + 100)
+    drop(drive, "second.mp4", at=START + 200)
+    newest = drop(drive, "third.mp4", at=START + 300)
+    restarted = Env(tmp_path, feed=env.feed)  # an hour later: nothing remembered in memory
+    restarted.now = env.now + 3600
+    restarted.watcher.tick()
+    arrive(restarted)
+    assert [j["video_id"] for j in restarted.jobs()] == [id_of(newest)]
+    held = [i for i in restarted.items() if i["status"] == "skipped"]
+    assert len(held) == 2 and all(i["reason"] == "Added while Clips Kitty wasn't watching." for i in held)
+    # Set aside, one click from being clipped after all.
+    item = restarted.item(id_of(first))
+    assert restarted.client.post(f"/automation/items/{item['id']}/queue").status_code == 200
+    restarted.later(5)
+    assert restarted.item(id_of(first))["status"] == "queued"
+
+
+def test_a_folder_must_be_on_this_pc_and_outside_clips_kittys_own_data(env, drive):
+    (env.data_dir / "downloads").mkdir(exist_ok=True)
+    for bad in (r"\\server\share\videos", "//server/share/videos", str(drive / "missing"), "relative/folder",
+                str(env.data_dir / "downloads"), str(drop(drive, "a file.mp4"))):
+        response = env.client.post("/automation/watches", json={"platform": "folder", "channel": bad})
+        assert response.status_code == 400, bad
+    assert env.client.get("/automation/watches").json() == []
+
+
+def test_a_folder_that_goes_away_says_so_once_and_carries_on_when_it_is_back(env, drive):
+    watch = add_folder(env, drive)
+    env.watcher.tick()
+    hidden = drive.with_name(drive.name + "-away")
+    drive.rename(hidden)  # a drive that isn't there for a while
+    env.later(automation.WATCH_TICK_SECONDS)
+    env.later(automation.WATCH_TICK_SECONDS)
+    assert env.client.get("/automation/watches").json()[0]["last_error"]
+    assert sum(line.startswith(f"Couldn't check {watch['name']}") for line in feed_lines(env)) == 1
+    hidden.rename(drive)
+    dropped = drop(drive, "game.mp4")
+    arrive(env)
+    assert env.client.get("/automation/watches").json()[0]["last_error"] == ""
+    assert env.item(id_of(dropped))["status"] == "queued"
+
+
+def test_a_folders_video_learns_into_the_watchs_creator_filed_like_a_file_added_by_hand(env, drive):
+    watch = add_folder(env, drive)
+    assert watch["creator"]["name"] == drive.name
+    env.watcher.tick()
+    dropped = drop(drive, "game.mp4")
+    arrive(env)
+    row = env.run(lambda d: d.conn.execute(
+        "SELECT v.creator_id, a.platform FROM videos v JOIN platform_accounts a ON a.creator_id = v.creator_id"
+        " WHERE v.video_id = ?", (id_of(dropped),)).fetchone())
+    assert (row["creator_id"], row["platform"]) == (watch["creator"]["id"], "youtube")
+
+
+def test_a_folders_footer_never_carries_its_path():
+    item = {"url": r"C:\Users\someone\Google Drive\Some Team\game.mp4", "title": "game"}
+    watch = {"platform": "folder", "name": "Some Team", "channel_key": r"C:\Users\someone\Google Drive\Some Team"}
+    got = automation.render_footer("{source_title} from {source_channel}. {source_url}{source_platform}", item, watch)
+    assert got == "game from Some Team."
+
+
+def test_a_folder_watch_on_the_phone_offers_its_files(env, drive):
+    phone_on(env)
+    add_folder(env, drive, publish={"mode": "phone"})
+    env.watcher.tick()
+    dropped = drop(drive, "game.mp4")
+    arrive(env)
+    vid = id_of(dropped)
+    clips_on_disk(env, vid)
+    review = announced(env, vid)
+    assert review is not None and review["title"] == "game"
+    env.later(automation.WATCH_TICK_SECONDS)
+    assert env.item(vid)["publish_state"] == "phone" and env.publish_calls == 0

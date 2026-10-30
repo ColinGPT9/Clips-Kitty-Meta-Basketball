@@ -15,6 +15,12 @@ offer the plain run's leftovers beside its own.
 Duplicate-safe by construction: the outbox key is the job id, so the same
 job announced twice queues one message, and an offer is only made once per
 job unless the creator asks for a new one.
+
+A job a watched channel or folder queued (server/automation.py) follows its
+watch's choice first (watch_choice): "Ask me on my phone" is offered whatever
+kind of video it is, and a watch that publishes automatically to Instagram,
+Facebook or Threads through WoopSocial is never offered as well, so a clip
+can't go out twice. Every other job keeps the Settings rules.
 """
 
 import json
@@ -58,8 +64,10 @@ def on_job_finished(db, job, status: str, *, started: float | None = None, data_
     video_id = (row["video_id"] if row else "") or ""
     clips = clips_of_run(db, video_id, row or job, started=started)
     kind = summary.kind_of(payload, clips, data_dir)
-    # Basketball only, unless the creator opted in to gaming and other videos.
-    if config["basketball_only"] and kind != "basketball":
+    choice = watch_choice(db, video_id, job["id"])
+    # Basketball only, unless the creator opted in to gaming and other videos,
+    # or chose "Ask me on my phone" for the channel or folder this came from.
+    if config["basketball_only"] and kind != "basketball" and choice != "phone":
         return None
 
     if status == "failed":
@@ -71,11 +79,49 @@ def on_job_finished(db, job, status: str, *, started: float | None = None, data_
         return None
     if status != "done" or not config["notify_on_finish"]:
         return None
+    if choice == "posted":
+        store.audit(db, 0, "desktop", "not_offered",
+                    f"job {job['id']}: its watch publishes it to Meta through WoopSocial automatically")
+        return None
     if any(r["state"] not in states.SETTLED for r in store.reviews_for_job(db, job["id"])):
         return None  # already offered and still open: an announce repeated
     return offer(db, job_id=int(job["id"]), video_id=video_id,
                  title=(row["title"] if row else "") or job["title"] or "", clips=clips, config=config,
                  kind=kind)
+
+
+def watch_choice(db, video_id: str, job_id) -> str:
+    """What the watch that queued this job says about offering it: "phone"
+    for one set to Ask me on my phone, "posted" for one that publishes
+    automatically through WoopSocial to Instagram, Facebook or Threads (the
+    places an offer posts to), "" for any other watch, and for a job no watch
+    queued. A watch's own job is the one on its item: a video found by a
+    watch but clipped some other way is an ordinary job.
+
+    Read straight from the watch's settings, as server/automation.py keeps
+    them, so this package stays free of the web server's imports."""
+    if not video_id:
+        return ""
+    row = db.conn.execute(
+        "SELECT w.publish FROM watch_items i JOIN watches w ON w.id = i.watch_id "
+        "WHERE i.video_id = ? AND i.job_id = ?",
+        (video_id, int(job_id)),
+    ).fetchone()
+    if row is None:
+        return ""
+    try:
+        publish = json.loads(row["publish"] or "{}")
+    except (TypeError, ValueError):
+        publish = {}
+    publish = publish if isinstance(publish, dict) else {}
+    # "ask" is what a watch saved without a mode means (automation.PublishSettings).
+    mode = publish.get("mode") or "ask"
+    if mode == "phone":
+        return "phone"
+    platforms = publish.get("platforms") if isinstance(publish.get("platforms"), list) else []
+    if mode == "auto" and {str(p) for p in platforms} & set(ra_settings.PLATFORMS):
+        return "posted"
+    return ""
 
 
 def clips_of_run(db, video_id: str, job, *, started: float | None = None, until: float | None = None) -> list:
