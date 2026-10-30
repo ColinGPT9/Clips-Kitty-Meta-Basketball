@@ -18,16 +18,16 @@ import { useEvents } from '../lib/useEvents'
 
 /** Settings → Notifications & Remote Approval (new for the Meta hackathon edition).
  *
- *  Word through the creator's Muse agent, or a WhatsApp message, when a
- *  video's highlights are ready (basketball ones, unless the creator opts in
- *  to gaming and every other video), and publishing to Instagram, Facebook
- *  and Threads approved from the phone. All of it goes through the creator's
- *  own relay (meta-relay/), which holds the WhatsApp and Meta tokens and is
- *  where Muse connects; this PC only calls out to it, so nothing here opens
- *  a port. Remote approval stays off until Muse is connected or a number is
- *  paired and confirmed, and an approval PIN is set. The card never sees a
- *  token, a secret or a full phone number; a new Muse key is shown once and
- *  then forgotten. */
+ *  A WhatsApp message when a video's highlights are ready, or the creator's
+ *  Muse agent to ask which are waiting (basketball ones, unless the creator
+ *  opts in to gaming and every other video), and publishing to Instagram,
+ *  Facebook and Threads approved from the phone. All of it goes through the
+ *  creator's own relay (meta-relay/), which holds the WhatsApp and Meta
+ *  tokens and is where Muse connects; this PC only calls out to it, so
+ *  nothing here opens a port. Remote approval stays off until Muse is
+ *  connected or a number is paired and confirmed, and an approval PIN is
+ *  set. The card never sees a token, a secret or a full phone number; a new
+ *  Muse key is shown once and then forgotten. */
 
 const POLL_MS = 4000
 
@@ -171,7 +171,7 @@ export default function NotificationsApprovalCard(): JSX.Element {
         <h3 className="font-semibold">{t('Notifications & Remote Approval')}</h3>
         <p className="text-sm text-muted">
           {t(
-            "Hear from your Muse agent or on WhatsApp when a video's highlights are ready, and choose from your phone which clips go to Instagram, Facebook and Threads. Everything goes through your own relay; this PC only calls out to it."
+            "Get a WhatsApp message when a video's highlights are ready, or ask your Muse agent which ones are waiting, and choose from your phone which clips go to Instagram, Facebook and Threads. Everything goes through your own relay; this PC only calls out to it."
           )}
         </p>
       </div>
@@ -253,7 +253,7 @@ export default function NotificationsApprovalCard(): JSX.Element {
           <h4 className="text-sm font-semibold">{t('2. Your Muse agent')}</h4>
           <p className="text-xs text-muted">
             {t(
-              'Muse can tell you when highlights are ready, give you the approval link, say what got posted, remind you later or cancel an offer. It can never post: you approve on the approval page with your PIN.'
+              'Ask Muse which highlights are ready, for the approval link, or what got posted. It can also set a reminder or cancel an offer. It can never post: you approve on the approval page with your PIN.'
             )}
           </p>
           {museOn ? (
@@ -273,8 +273,13 @@ export default function NotificationsApprovalCard(): JSX.Element {
                   disabled={disabled}
                   onClick={() =>
                     void run(async () => {
-                      if (!window.confirm(t('Revoke the Muse key? Muse stops working with Clips Kitty until you make a new key.')))
-                        return
+                      // With no WhatsApp to reach the phone, revoking also switches approving from it off
+                      // (service.revoke_muse_key), so the question says so.
+                      const question =
+                        s.remote_approvals && !(paired && s.whatsapp_enabled)
+                          ? t('Revoke the Muse key? Muse stops working with Clips Kitty until you make a new key, and approving from your phone switches off.')
+                          : t('Revoke the Muse key? Muse stops working with Clips Kitty until you make a new key.')
+                      if (!window.confirm(question)) return
                       setStatus(await remoteApproval.museRevoke())
                       setMuseKey('')
                       setNotice(t('The Muse key no longer works.'))

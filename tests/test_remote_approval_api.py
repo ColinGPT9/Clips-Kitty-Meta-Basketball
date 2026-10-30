@@ -256,6 +256,21 @@ def test_a_muse_key_is_shown_once_and_kept_nowhere_on_this_pc(client, monkeypatc
     assert r.json()["settings"]["remote_approvals"] is False  # no WhatsApp either: nothing reaches the phone
 
 
+def test_revoking_says_whether_the_key_stopped_working_not_whether_the_preferences_followed(client, monkeypatch):
+    relay = _registered(client, monkeypatch)
+    assert client.post("/remote-approval/muse/token", headers=HEADERS).status_code == 200
+    # The relay can't be reached: the key still works, and Settings says so.
+    relay.fail["muse_revoke"] = RelayError("network", "Couldn't reach your relay.", retryable=True)
+    r = client.post("/remote-approval/muse/revoke", headers=HEADERS)
+    assert r.status_code == 502 and r.json()["detail"] == "Couldn't reach your relay."
+    assert client.get("/remote-approval/status").json()["settings"]["muse"]["enabled"] is True
+    # The key stopped working but the preferences didn't follow: that is no failure to report.
+    relay.fail["preferences"] = RelayError("network", "Couldn't reach your relay.", retryable=True)
+    r = client.post("/remote-approval/muse/revoke", headers=HEADERS)
+    assert r.status_code == 200
+    assert relay.muse["enabled"] is False and r.json()["settings"]["muse"]["enabled"] is False
+
+
 def test_a_relay_from_before_muse_says_to_deploy_it_again(client, monkeypatch):
     relay = _registered(client, monkeypatch)
     relay.fail["muse_token"] = RelayError("not_found", "Unknown relay route.", status=404)

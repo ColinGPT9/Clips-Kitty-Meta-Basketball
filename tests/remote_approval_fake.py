@@ -102,6 +102,7 @@ class FakeRelay:
 
     def preferences(self, prefs):
         self.calls.append(("preferences", prefs))
+        self._maybe_fail("preferences")
         return {"prefs": prefs}
 
     def cancel(self, approval_id):
@@ -118,5 +119,6 @@ class FakeRelay:
 
     def muse_revoke(self):
         self.calls.append(("muse_revoke",))
+        self._maybe_fail("muse_revoke")
         self.muse = {"enabled": False, "created_at": 0, "last_used": 0}
         return {"revoked": True, "muse": self.muse}

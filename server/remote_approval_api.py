@@ -261,12 +261,18 @@ def install(app, *, db, data_dir, session_secret: str, publish_worker=None) -> N
     def remote_muse_revoke():
         d = db()
         try:
+            relay = relay_for(d)
             try:
-                relay = relay_for(d)
                 service.revoke_muse_key(d, relay)
-                service.push_preferences(d, relay)
             except RelayError as e:
                 raise muse_fail(e) from None
+            try:
+                service.push_preferences(d, relay)
+            except RelayError:
+                # The key has stopped working, which is what Settings asked. An
+                # error here would say it hadn't; the next settings change sends
+                # these again.
+                pass
             out = status(d)
         finally:
             d.close()
