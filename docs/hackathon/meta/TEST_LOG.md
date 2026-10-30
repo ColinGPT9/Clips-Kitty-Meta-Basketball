@@ -74,11 +74,54 @@ a side effect. They were restored before every commit.
 Threads with the PIN → 3 publish jobs → 9 posts confirmed with their links
 → "9 of 9 posts published" sent back. Screenshots: [img/](img/).
 
+## Windows run (October 30, 2026)
+
+The Windows test steps on the creator's Windows 10 PC, still with Meta
+faked. The branch was at `3cbccd8` to start.
+
+Tools: Python 3.11.0, Node v22.11.0, FFmpeg (June 2026 build).
+
+| Step | Result |
+|---|---|
+| The five PC test files in a venv with `pyyaml requests pytest fastapi httpx` | Before the fix: 96 passed, 7 errors. After: **103 passed** |
+| Relay: `cd meta-relay; npm test` | Before the fix: the tests could not load. After: **29 passed** |
+| `python scripts\meta_demo.py` | Ran cleanly: offer, template message, approval with the PIN, 9 of 9 fake posts, results message, audit trail |
+| The app from source (`ui`: `npm run dev`) with the mock relay (`meta-relay`: `npm run dev`) | Relay connected with the enrolment key, number paired from the fake phone, PIN set, Facebook + Instagram and Threads connected through the mock. A 90-second cut of the public-domain 1995 game, run as Sports → Basketball, made an offer, and the fake phone got the `ck_highlights_ready` message |
+
+Fixed on this branch:
+
+- `f1b5ebd`: Node 22.5 to 22.12 only have `node:sqlite` when started with
+  `--experimental-sqlite`; Node 22.13 dropped the flag. The 7 errors were
+  the tests that start the relay. The flag is now passed everywhere the
+  relay starts (the npm scripts, `meta_demo.py`, the end-to-end test and
+  CI), and Node 22.13.0 and 24.22.2 accept it too. Not a Windows problem:
+  any Node from 22.5 to 22.12 hits it.
+- `6991bf6`: a video added from the computer lost its Sports choice, clip
+  direction and plugin options before it reached the engine. The first run
+  was processed as an ordinary video, so, correctly, nothing was offered.
+  `addLocalVideo` now sends them, and `tests/test_ui_local_upload.py` runs
+  the real `api.ts` under Node to check what it sends.
+
+Found, not fixed in this run:
+
+- The offer also held the clips of an earlier, non-basketball run of the
+  same video: 4 clips, only 1 of them from this run.
+- A clip labelled `big_moment` was counted as "other plays" in the message.
+
+Not done in the app: approving on the `/a/...` page with the PIN, the fake
+uploads and the result in the card. The end-to-end tests and the demo above
+cover that flow against the real relay code.
+
+The test steps pointed to section 3 of `MORNING_RUNBOOK.md`, which is not in
+the repository; the run followed the Settings card and the docs in this folder.
+
 ## Not yet tested
 
 - Against live Meta services (needs the creator's Meta app, business
-  number, relay deployment and accounts): see the morning runbook.
-- On Windows (the container is Linux). The PC side uses the app's existing
-  Windows paths and DPAPI secret storage, which the original test suite covers.
+  number, relay deployment and accounts): see
+  [WHATSAPP_SETUP.md](WHATSAPP_SETUP.md) and
+  [META_PUBLISHING.md](META_PUBLISHING.md).
+- Approving a real offer from the Windows app (the PIN page, the fake
+  uploads and the card's result): see the Windows run above.
 - With a real basketball game through the vision pipeline: unchanged by
   this fork, so the hook was tested with clip rows and real rendered files.
