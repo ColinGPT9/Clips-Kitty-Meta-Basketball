@@ -298,7 +298,7 @@ def test_a_failed_job_sends_the_plain_failure_message(db, pc):
     notifier.on_job_finished(db, db.get_job(job["id"]), "failed")
     pc["tick"]()
     message = phone.last_message()
-    wording = "Clips Kitty could not finish processing your basketball video. Open the app for details."
+    wording = "Clips Kitty could not finish processing your video. Open the app for details."
     if message["type"] == "template":
         # The approved template carries the wording; nothing from the job goes with it.
         assert message["template"]["name"] == "ck_processing_failed"

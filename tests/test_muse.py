@@ -8,6 +8,7 @@
 """
 
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -266,6 +267,76 @@ def test_each_platform_gets_muse_text_and_the_clip_text_is_the_fallback(db, tmp_
     assert made["title"] == f"Big play {entry['clip_id']}"
     assert made["instagram"].startswith("What a finish in the third.") and "#basketball" in made["instagram"]
     assert made["threads"] == "What a finish."
+
+
+@pytest.fixture
+def gaming_offer(db, tmp_path, plugin_source, install_plugin):
+    """A gaming stream a game's own pipeline clipped (an installed plugin
+    whose category is gaming), offered once the creator opted in to gaming
+    and other videos."""
+    keys.save_key(tmp_path, "meta", KEY)
+    install_plugin(tmp_path, plugin_source.folder("pipeline", plugin_source.manifest(
+        id="someone/some-pipeline", category="gaming")))
+    ra_settings.save(db, {"whatsapp_enabled": True, "basketball_only": False})
+    db.upsert_video("vid_stream", title="Weekend stream")
+    payload = {"url": "https://example.com/stream.mp4", "pipeline": {"id": "someone/some-pipeline"}}
+    job_id = db.add_job("process", json.dumps(payload), video_id="vid_stream", title="Weekend stream")
+    folder = tmp_path / "stream"
+    folder.mkdir()
+    for i, label in enumerate(("chase", "crash")):
+        path = folder / f"clip{i}.mp4"
+        path.write_bytes(os.urandom(4096 + i))
+        db.add_clip("vid_stream", 30.0 * i, 30.0 * i + 20, 90 - i, "Hook", path=str(path),
+                    hashtags=json.dumps(["#gta6", "#gtarp"]),
+                    scores=json.dumps({"plugin": "someone/some-pipeline", "plugin_label": label}))
+    db.finish_job(job_id, "done")
+    review = store.get_review(db, notifier.on_job_finished(db, db.get_job(job_id), "done", data_dir=tmp_path))
+    rows = {c["clip_id"]: db.get_clip(c["clip_id"]) for c in review["clips"]}
+    return review, rows
+
+
+def test_a_gaming_offer_is_written_as_gaming_and_never_as_basketball(db, tmp_path, gaming_offer):
+    review, rows = gaming_offer
+    sent = []
+
+    def send(spec, key, method, path, json_body=None, **kw):
+        sent.append(json_body)
+        return _answer(review, extra_clip=False)
+
+    captions.generate(db, tmp_path, review, rows, model="muse-spark-1.3", send=send)
+    developer, user = sent[0]["messages"]
+    assert developer["content"] == captions.INSTRUCTIONS_FOR["gaming"]
+    assert "Never invent" in developer["content"] and "gaming" in developer["content"]
+    assert "basketball" not in json.dumps(sent[0]).lower()
+    told = json.loads(user["content"])
+    assert [c["moment"] for c in told["clips"]] == ["Chase", "Crash"] and "play" not in told["clips"][0]
+    assert told["counts"] == "1 chase and 1 crash"
+    review = store.get_review(db, review["id"])
+    entry = review["clips"][0]
+    made = captions.texts_for(review, rows[entry["clip_id"]], entry)
+    assert made["source"] == "muse_spark"
+    assert "#gaming" in made["instagram"] and "#gta6" in made["instagram"] and "#basketball" not in made["instagram"]
+
+
+def test_without_muse_spark_each_kind_of_offer_has_its_own_words():
+    row = {"hashtags": json.dumps(["#gta6"]), "hook": "", "description": ""}
+    entry = {"clip_id": 1, "title": "", "label": ""}
+
+    def texts(summary):
+        return captions.texts_for({"summary": summary, "fingerprint": "f" * 32}, row, entry)
+
+    basketball, gaming, video = (texts({"kind": k}) for k in ("basketball", "gaming", "video"))
+    assert basketball["title"] == "Basketball highlight"
+    assert basketball["instagram"].endswith("#gta6 #basketball #highlights")
+    assert gaming["title"] == "Gaming highlight" and gaming["instagram"].endswith("#gta6 #gaming")
+    assert video["title"] == "Highlight" and video["instagram"].endswith("#gta6")
+    assert "basketball" not in json.dumps([gaming, video]).lower()
+    assert "gaming" not in json.dumps(video).lower()
+    # An offer made before offers had a kind was a basketball one.
+    assert texts({})["title"] == "Basketball highlight"
+    for kind, words in captions.INSTRUCTIONS_FOR.items():
+        assert "Never invent" in words, kind
+    assert "basketball" not in captions.INSTRUCTIONS_FOR["video"].lower()
 
 
 def test_an_offer_never_waits_on_muse_spark(db, tmp_path, offer, monkeypatch):

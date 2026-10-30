@@ -8,19 +8,22 @@ and every rule along the way.
 ## The flow
 
 1. **The job finishes.** The job announcer calls the notifier. For a
-   basketball `process` job with WhatsApp on, it snapshots the best clips
-   (up to `max_clips`, best score first, skipping missing files), pins each
-   file's size and modification time, computes a fingerprint over them, and
-   counts highlights by category from the pipeline's own events. State:
+   basketball `process` job with WhatsApp on (or any video, once Settings
+   has **Offer gaming and other videos too** ticked), it snapshots the best
+   of the clips this run made (up to `max_clips`, best score first, skipping
+   missing files, Longform cuts, story reels and clips already posted
+   everywhere), pins each file's size and modification time, computes a
+   fingerprint over them, and counts highlights by category from the
+   pipeline's own events. State:
    `READY_FOR_REVIEW` → `NOTIFICATION_PENDING`. A failed job queues the plain
    failure message instead, with no error text.
 2. **The message goes out.** The publish worker's loop sends the outbox to
    the relay. The relay creates an approval (`apr_…`), a 32-byte link token
    (only its hash is stored), keeps the thumbnails, and sends the
-   `ck_highlights_ready` template: *"Clips Kitty finished your basketball
-   video {{title}}. Highlights found: {{5 clips: 2 dunks, 1 three, 1 block
-   and 1 steal}}. Review the clips and choose where to publish them before
-   the link expires."* with **Review clips**, **Remind me later** and
+   `ck_highlights_ready` template: *"Clips Kitty finished your video
+   {{title}}. Ready to review: {{5 clips: 2 dunks, 1 three, 1 block and 1
+   steal}}. Choose where to publish them before the link expires."* with
+   **Review clips**, **Remind me later** and
    **Cancel**. State: `NOTIFICATION_SENT`, then `AWAITING_APPROVAL` once
    WhatsApp reports it delivered or the link is opened.
 3. **The phone decides.** The page lists the offered clips (thumbnail, play,
@@ -81,6 +84,10 @@ and every rule along the way.
   by a retry, and an upload cut off by a restart is reported as
   "unconfirmed: check the account" and never retried automatically (the
   existing publish worker's rule).
+- A platform a clip is already posted on, or on its way to (a post
+  WoopSocial has scheduled, an upload in progress), by any publisher, is
+  left out of an approval and shown as skipped in the results. The approval
+  page says where a clip is already posted.
 
 ## When the PC is off
 
@@ -102,7 +109,7 @@ and **Send again** (after WhatsApp could not deliver, with a fresh link).
 | Event | Template | Notes |
 |---|---|---|
 | Highlights ready | `ck_highlights_ready` | Title and counts from the job; optional Muse Spark line only when turned on |
-| Processing failed | `ck_processing_failed` | Exactly: "Clips Kitty could not finish processing your basketball video. Open the app for details." No error text, no path |
+| Processing failed | `ck_processing_failed` | Exactly: "Clips Kitty could not finish processing your video. Open the app for details." No error text, no path |
 | Publishing finished | `ck_publish_update` | Counted from confirmed results only; links are on the status page |
 | Test | `ck_test_message` | From Settings |
 

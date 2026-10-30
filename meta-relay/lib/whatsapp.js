@@ -32,8 +32,8 @@ export function templateDefs(publicUrl) {
       components: [
         {
           type: "BODY",
-          text: "Clips Kitty finished your basketball video {{1}}. Highlights found: {{2}}. Review the clips and choose where to publish them before the link expires.",
-          example: { body_text: [["Raptors vs Celtics", "6 clips: 2 dunks, 1 three and 3 other plays"]] },
+          text: "Clips Kitty finished your video {{1}}. Ready to review: {{2}}. Choose where to publish them before the link expires.",
+          example: { body_text: [["Weekend stream", "4 highlights (best 4 of 9)"]] },
         },
         { type: "FOOTER", text: "Reply STOP to turn these messages off" },
         {
@@ -51,7 +51,7 @@ export function templateDefs(publicUrl) {
       category: "UTILITY",
       language: LANGUAGE,
       components: [
-        { type: "BODY", text: "Clips Kitty could not finish processing your basketball video. Open the app for details." },
+        { type: "BODY", text: "Clips Kitty could not finish processing your video. Open the app for details." },
       ],
     },
     {

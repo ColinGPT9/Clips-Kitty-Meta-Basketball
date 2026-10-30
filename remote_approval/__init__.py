@@ -1,13 +1,14 @@
-"""Remote approval: a finished basketball video's clips, offered on WhatsApp,
-approved on the creator's phone, published from this PC.
+"""Remote approval: a finished video's clips, offered on WhatsApp, approved
+on the creator's phone, published from this PC. Basketball videos only,
+unless the creator opts in to gaming and other videos in Settings.
 
 New for the Meta hackathon edition. The pieces, in the order a clip moves
 through them:
 
 * notifier.py   - the pipeline worker's terminal announce calls in here. It
-                  snapshots the clips, counts the highlights and queues a
-                  notification. A database write only: no network on the
-                  pipeline thread.
+                  snapshots the clips this run made, counts the highlights
+                  and queues a notification. A database write only: no
+                  network on the pipeline thread.
 * service.py    - runs on the publish worker's loop. Sends what the outbox
                   holds to the relay, asks the relay for decisions made on the
                   phone, and reports results back.

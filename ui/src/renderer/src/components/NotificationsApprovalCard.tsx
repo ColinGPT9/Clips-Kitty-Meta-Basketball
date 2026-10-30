@@ -15,7 +15,8 @@ import { useEvents } from '../lib/useEvents'
 
 /** Settings → Notifications & Remote Approval (new for the Meta hackathon edition).
  *
- *  A WhatsApp message when a basketball video's highlights are ready, and
+ *  A WhatsApp message when a video's highlights are ready (basketball ones,
+ *  unless the creator opts in to gaming and every other video), and
  *  publishing to Instagram, Facebook and Threads approved from the phone.
  *  All of it goes through the creator's own relay (meta-relay/), which holds
  *  the WhatsApp and Meta tokens; this PC only calls out to it, so nothing
@@ -127,14 +128,16 @@ export default function NotificationsApprovalCard(): JSX.Element {
   const label = (p: Platform): string => s.platform_labels[p] ?? p
   const disabled = busy || !allowed
 
-  const toggle = (key: keyof typeof s, text: string, hint = '', off = false): JSX.Element => (
+  // `invert`: the box is ticked when the setting is off (basketball_only reads
+  // as "Offer gaming and other videos too").
+  const toggle = (key: keyof typeof s, text: string, hint = '', off = false, invert = false): JSX.Element => (
     <label className={`flex items-start gap-2 text-sm ${off ? 'opacity-60' : 'cursor-pointer'}`}>
       <input
         type="checkbox"
         className="size-4 mt-0.5 accent-[#38BDF8]"
-        checked={Boolean(s[key])}
+        checked={Boolean(s[key]) !== invert}
         disabled={disabled || off}
-        onChange={(e) => void save({ [key]: e.target.checked })}
+        onChange={(e) => void save({ [key]: e.target.checked !== invert })}
       />
       <span>
         {text}
@@ -149,7 +152,7 @@ export default function NotificationsApprovalCard(): JSX.Element {
         <h3 className="font-semibold">{t('Notifications & Remote Approval')}</h3>
         <p className="text-sm text-muted">
           {t(
-            "Get a WhatsApp message when a basketball video's highlights are ready, and choose from your phone which clips go to Instagram, Facebook and Threads. Messages and posts go through your own relay; this PC only calls out to it."
+            "Get a WhatsApp message when a video's highlights are ready, and choose from your phone which clips go to Instagram, Facebook and Threads. Messages and posts go through your own relay; this PC only calls out to it."
           )}
         </p>
       </div>
@@ -458,6 +461,13 @@ export default function NotificationsApprovalCard(): JSX.Element {
                 </select>
               </label>
             </div>
+          )}
+          {toggle(
+            'basketball_only',
+            t('Offer gaming and other videos too'),
+            t('Basketball videos are always offered. This adds every other finished video.'),
+            false,
+            true
           )}
           {toggle(
             'muse_captions',

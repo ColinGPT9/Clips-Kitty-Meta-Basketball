@@ -330,11 +330,22 @@ def install(app, *, db, data_dir, session_secret: str, publish_worker=None) -> N
                 elif what == "retry":
                     result = {"queued": service.retry_failed(d, review_id)}
                     if not result["queued"]:
-                        raise HTTPException(409, "Nothing in this offer failed, so there is nothing to retry.")
+                        # A post that failed is not sent again once it is up,
+                        # or on its way, from somewhere else (commands.queue_publishes).
+                        failed = any(p.get("state") == "failed"
+                                     for c in (review.get("results") or {}).get("clips") or []
+                                     for p in c.get("posts") or [])
+                        raise HTTPException(409, "What failed is already posted, on its way or uploading now, "
+                                                 "so there is nothing to retry." if failed else
+                                                 "Nothing in this offer failed, so there is nothing to retry.")
                 elif what == "ask-again":
+                    if review["state"] not in (states.EXPIRED, states.CANCELLED):
+                        raise HTTPException(409, "Only an expired or cancelled offer can be sent again.")
                     new_id = service.ask_again(d, review_id)
                     if not new_id:
-                        raise HTTPException(409, "Only an expired or cancelled offer can be sent again.")
+                        # Nothing of its run is left to offer (notifier.offer).
+                        raise HTTPException(409, "None of this video's clips can be offered again: they were "
+                                                 "removed or made again since, or are posted everywhere already.")
                     result = {"review_id": new_id}
                 else:
                     if not service.resend(d, review_id):

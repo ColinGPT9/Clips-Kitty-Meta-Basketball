@@ -14,11 +14,11 @@ pytest.importorskip("httpx")
 
 from fastapi.testclient import TestClient  # noqa: E402
 from remote_approval_fake import SECRET as DEVICE_SECRET  # noqa: E402
-from remote_approval_fake import FakeRelay, finished_job  # noqa: E402
+from remote_approval_fake import FakeRelay, finished_job, sign_command  # noqa: E402
 from test_remote_approval_e2e import ENROLL_KEY, Phone, _node_ok, relay_url  # noqa: E402, F401
 
 from core.state import StateDB  # noqa: E402
-from remote_approval import notifier, service, states, store  # noqa: E402
+from remote_approval import commands, notifier, service, states, store  # noqa: E402
 from remote_approval import settings as ra_settings  # noqa: E402
 from server import remote_approval_api  # noqa: E402
 
@@ -110,6 +110,15 @@ def test_bad_settings_are_refused(client):
     assert r.json()["settings"]["preferred_destinations"] == ["instagram"]
 
 
+def test_the_gaming_opt_in_is_saved_from_settings(client):
+    assert client.get("/remote-approval/status").json()["settings"]["basketball_only"] is True
+    r = client.patch("/remote-approval/settings", json={"basketball_only": False}, headers=HEADERS)
+    assert r.status_code == 200 and r.json()["settings"]["basketball_only"] is False
+    assert client.get("/remote-approval/status").json()["settings"]["basketball_only"] is False
+    r = client.patch("/remote-approval/settings", json={"basketball_only": True}, headers=HEADERS)
+    assert r.json()["settings"]["basketball_only"] is True
+
+
 def test_routes_that_need_the_relay_say_so_before_it_is_set_up(client):
     r = client.post("/remote-approval/pair/start", headers=HEADERS)
     assert r.status_code == 409 and "relay" in r.json()["detail"]
@@ -149,6 +158,55 @@ def test_offers_can_be_cancelled_resent_and_asked_again_from_the_app(client, mon
     new = r.json()["review_id"]
     assert client.get(f"/remote-approval/reviews/{new}").json()["state"] == states.NOTIFICATION_PENDING
     assert any(e.get("type") == "remote_approval" for e in events)
+
+
+def test_asking_again_says_so_when_nothing_is_left_to_offer(client):
+    d = client.db()
+    ra_settings.save(d, {"whatsapp_enabled": True, "relay_url": "https://relay.test"})
+    job = finished_job(d, client.dir)
+    review_id = notifier.on_job_finished(d, job, "done")
+    d.close()
+    r = client.post(f"/remote-approval/reviews/{review_id}/ask-again", headers=HEADERS)
+    assert r.status_code == 409 and r.json()["detail"] == "Only an expired or cancelled offer can be sent again."
+
+    d = client.db()
+    for clip in d.clips_for_video(job["video_id"]):  # every clip posted everywhere since
+        for platform in ra_settings.PLATFORMS:
+            d.record_clip_publish(int(clip["id"]), platform, {"provider": "woopsocial", "state": "published"})
+    store.move(d, review_id, states.EXPIRED, actor="test")
+    d.close()
+    r = client.post(f"/remote-approval/reviews/{review_id}/ask-again", headers=HEADERS)
+    assert r.status_code == 409
+    assert r.json()["detail"] == ("None of this video's clips can be offered again: they were removed or made "
+                                  "again since, or are posted everywhere already.")
+
+
+def test_a_retry_says_so_when_what_failed_went_up_from_somewhere_else(client):
+    d = client.db()
+    ra_settings.save(d, {"whatsapp_enabled": True, "relay_url": "https://relay.test", "remote_approvals": True})
+    ra_settings.save(d, {"pairing": {"state": "confirmed"}, "pin_set": True, "accounts": FakeRelay().accounts},
+                     internal=True)
+    review_id = notifier.on_job_finished(d, finished_job(d, client.dir), "done")
+    service.flush_outbox(d, client.dir, FakeRelay())
+    review = store.get_review(d, review_id)
+    clip = review["clips"][0]["clip_id"]
+    out = commands.handle(d, sign_command({
+        "id": "cmd_" + "e" * 24, "kind": "approve", "approval_id": review["approval_id"], "review_ref": review_id,
+        "fingerprint": review["fingerprint"], "clips": [clip], "platforms": ["instagram"],
+        "decided_at": store.stamp(),
+    }), secret=DEVICE_SECRET)
+    assert out.outcome == "accepted"
+    d.record_clip_publish(clip, "instagram", {"provider": "meta", "state": "failed", "error": "Refused.",
+                                              "request_id": review["approval_id"]})
+    d.finish_publish_job(commands.jobs_for_review(d, review_id)[0]["id"], "failed")
+    service.settle_publishing(d, ra_settings.load(d))
+    assert store.get_review(d, review_id)["state"] == states.FAILED
+    d.record_clip_publish(clip, "instagram", {"provider": "woopsocial", "state": "published"})  # posted since
+    d.close()
+    r = client.post(f"/remote-approval/reviews/{review_id}/retry", headers=HEADERS)
+    assert r.status_code == 409
+    assert r.json()["detail"] == ("What failed is already posted, on its way or uploading now, so there is "
+                                  "nothing to retry.")
 
 
 def store_approval(client, review_id):
