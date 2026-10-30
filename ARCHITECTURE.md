@@ -918,7 +918,9 @@ Rules worth knowing before changing this:
 
 The **Ask Clips Kitty** box at the bottom of the app talks to `server/agent.py`
 (`/agent/chat`): the same LLM as the clips, given the app's tools (queue videos with
-their settings, a clip direction, sport options and match events, and more).
+their settings, a clip direction, sport options and match events, and more). In the
+Meta hackathon edition, a saved Meta Model API key runs it on Muse Spark instead,
+whatever model picks the clips (`muse_backend`).
 `server/mcp.py` offers the same tools over MCP on stdio, so Claude, Cursor and other
 assistants can drive Clips Kitty too.
 

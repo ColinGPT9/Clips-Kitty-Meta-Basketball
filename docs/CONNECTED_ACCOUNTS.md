@@ -29,7 +29,8 @@ Discord authorization and bot installation are a separate integration effort.
    An account that shows **Reconnect required** has a **Reconnect** button,
    which asks for the same permissions it had. **Watch my channel** adds the
    channel with the Watch page's Add a channel choices (from Settings: the
-   Generate bar's settings, and clips wait for you before publishing). When
+   Generate bar's settings, and in the Meta hackathon edition publishing set
+   to **Ask me on my phone**, so its clips go to your phone for approval). When
    Twitch doesn't confirm a disconnect removed its authorization, the card says
    so, and the app can be removed under Connections in Twitch's settings.
 
