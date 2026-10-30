@@ -21,6 +21,8 @@ from server import agent
 
 ROOT = Path(__file__).resolve().parent.parent
 KEY = "meta-assistant-key-" + "Sp4rk" * 6
+# Another provider's key, for a cloud model that picks the clips.
+OTHER_KEY = "other-provider-key-" + "K3y" * 10
 CHAT_URL = "https://api.meta.ai/v1/chat/completions"
 
 
@@ -264,6 +266,57 @@ def test_the_contributor_build_that_picks_the_clips_runs_the_box_too(env):
     meta = env.use_meta(_said("Hi."))
     assert env.client.post("/agent/chat", json={"message": "hi"}).status_code == 200
     assert meta.sent[0]["json"]["model"] == "muse-spark-1.3-contributor"
+
+
+@pytest.mark.parametrize(("clips_on", "their_key"), [
+    ("openrouter/google/gemma-4-26b-a4b-it", "openrouter"),
+    ("xai/grok-4.7", "xai"),
+    # A signed-in ChatGPT plan can't run the box; with the Meta key, Muse Spark does.
+    ("chatgpt/gpt-6-luna", None),
+])
+def test_with_a_meta_key_muse_spark_runs_the_box_whatever_cloud_model_picks_the_clips(env, clips_on, their_key):
+    keys.save_key(env.data, "meta", KEY)
+    if their_key:
+        keys.save_key(env.data, their_key, OTHER_KEY)
+    env.config["llm"]["backend"] = clips_on
+    status = env.client.get("/agent/status").json()
+    assert (status["ready"], status["model"], status["configured"]) == (True, "Muse Spark", "meta/muse-spark-1.3")
+    meta = env.use_meta(_said("Hi."))
+    assert env.client.post("/agent/chat", json={"message": "hi"}).status_code == 200
+    # Meta's own address and Meta's key: the other provider's key never goes.
+    [sent] = meta.sent
+    assert sent["url"] == CHAT_URL and sent["headers"]["Authorization"] == f"Bearer {KEY}"
+    assert env.config["llm"]["backend"] == clips_on
+
+
+def test_without_a_meta_key_a_cloud_model_that_picks_the_clips_runs_the_box_as_before(env):
+    env.config["llm"]["backend"] = "xai/grok-4.7"
+    assert env.client.get("/agent/status").json() == {
+        "ready": False, "model": "xai/grok-4.7", "configured": "xai/grok-4.7",
+        "reason": "Add your xAI API key in Settings → AI to use the assistant.", "install": None,
+    }
+    keys.save_key(env.data, "xai", OTHER_KEY)
+    assert env.client.get("/agent/status").json()["ready"] is True
+    cloud = env.use_meta(_said("Hi from xAI."))  # the fake transport answers for any provider
+    out = env.client.post("/agent/chat", json={"message": "hi"}).json()
+    assert out["reply"] == "Hi from xAI." and out["model"] == "xai/grok-4.7"
+    [sent] = cloud.sent
+    assert sent["url"] == "https://api.x.ai/v1/chat/completions"
+    assert sent["headers"]["Authorization"] == f"Bearer {OTHER_KEY}"
+    assert "reasoning_effort" not in sent["json"] and sent["json"]["tools"]
+    assert env.ollama.calls == []
+
+
+def test_a_meta_key_that_no_longer_decrypts_leaves_the_box_on_this_pc(env):
+    keys.save_key(env.data, "meta", KEY)
+    next((env.data / "credentials").glob("ai_key_meta.*")).write_bytes(b"not a key any more")
+    ollama = env.use_ollama("gemma:7b", "gemma4:e4b", with_tools={"gemma4:e4b"})
+    status = env.client.get("/agent/status").json()
+    assert (status["ready"], status["model"]) == (True, "gemma4:e4b")
+    # Nothing is faked for Meta, so a request there would fail the exchange.
+    out = env.client.post("/agent/chat", json={"message": "hi"}).json()
+    assert out["reply"] == "Hello from this PC." and out["model"] == "gemma4:e4b"
+    assert any(url.endswith("/api/chat") for url in ollama.calls)
 
 
 def test_a_key_meta_refuses_is_a_plain_400_that_never_repeats_the_key(env):
