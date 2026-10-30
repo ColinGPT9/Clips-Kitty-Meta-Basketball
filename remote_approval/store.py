@@ -142,6 +142,16 @@ def update_review(db, review_id: int, **fields) -> None:
     db.conn.commit()
 
 
+def published_platforms(db, clip_id: int) -> set[str]:
+    """Where this clip is already published, by any provider: clip_publishes
+    is the table every publisher writes, so a clip WoopSocial or an earlier
+    offer already posted to Instagram is never posted there a second time."""
+    rows = db.conn.execute(
+        "SELECT platform FROM clip_publishes WHERE clip_id = ? AND state = 'published'", (int(clip_id),)
+    ).fetchall()
+    return {r["platform"] for r in rows}
+
+
 # ---- the outbox --------------------------------------------------------------
 
 

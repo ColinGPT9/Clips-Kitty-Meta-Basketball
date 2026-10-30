@@ -3,20 +3,26 @@
 Muse Spark writes them when the creator turns that on: ONE structured request
 per offer, covering every offered clip and every platform at once (titles,
 Instagram captions, Facebook descriptions, Threads posts, hashtags, and a
-one-line summary of the game), held to a strict JSON schema. The answer is
+one-line summary of the video), held to a strict JSON schema. The answer is
 stored on the offer and reused: opening the approval page, a reminder, a
 retry or a new offer of the same clips never asks again, and a routine
 confirmation never asks at all. Its token use and cost are recorded from the
 API's own `usage` block (usage.py).
 
-The model is told only what the pipeline found (the play type, the clip's
-title, the team or player the scoreboard named, the video's title) and told
-not to invent scores, names or stats. What comes back is checked: a clip id
-it was not given is dropped, lengths are capped, hashtags are cleaned.
+The model is told only what the pipeline found (the play or moment, the
+clip's title, the team or player the scoreboard named, the video's title)
+and told not to invent scores, names or stats. What comes back is checked: a
+clip id it was not given is dropped, lengths are capped, hashtags are
+cleaned.
 
 Without Muse Spark, or if it fails, the text is built from what the clip
 already has (its title, description and hashtags from the pipeline's own
 metadata step), so publishing never waits on a model.
+
+The words follow the offer's kind (summary.kind_of): only a basketball
+offer is written as basketball and tagged #basketball, a gaming one is
+written as gaming and tagged #gaming beside the clip's own hashtags, and any
+other video in plain words with nothing added.
 """
 
 import json
@@ -47,32 +53,62 @@ SCHEMA = {
     "additionalProperties": False,
 }
 
+# What every kind of offer asks for, and how the answer comes back.
+_ASK = (
+    "For each clip below, write: a short title (max 80 characters); an Instagram Reels caption (1-3 "
+    "sentences, then hashtags); a Facebook Reels description (1-3 sentences); a Threads post (one "
+    "sentence, max 200 characters, no hashtags); and 3 to 6 hashtags without spaces. Also write "
+    "`summary`: one sentence (max 140 characters) describing the set of highlights.\n"
+)
+_ANSWER = " Answer with JSON matching the schema, with one entry per clip_id given and no others."
+
 INSTRUCTIONS = (
-    "You write social posts for a basketball highlights creator. For each clip below, write: "
-    "a short title (max 80 characters); an Instagram Reels caption (1-3 sentences, then hashtags); "
-    "a Facebook Reels description (1-3 sentences); a Threads post (one sentence, max 200 "
-    "characters, no hashtags); and 3 to 6 hashtags without spaces. Also write `summary`: one "
-    "sentence (max 140 characters) describing the set of highlights.\n"
-    "Rules: use ONLY the facts given for each clip. Never invent a score, a statistic, a player "
+    "You write social posts for a basketball highlights creator. " + _ASK
+    + "Rules: use ONLY the facts given for each clip. Never invent a score, a statistic, a player "
     "name, a team, a date or a result that is not given. If no player or team is given, describe "
-    "the play itself. No emojis in titles. Keep the tone energetic but plain. Answer with JSON "
-    "matching the schema, with one entry per clip_id given and no others."
+    "the play itself. No emojis in titles. Keep the tone energetic but plain." + _ANSWER
 )
 
+#: The instructions for each kind of offer (summary.kind_of). The same
+#: request and the same rule: nothing that was not given.
+INSTRUCTIONS_FOR = {
+    "basketball": INSTRUCTIONS,
+    "gaming": (
+        "You write social posts for a gaming clips creator. " + _ASK
+        + "Rules: use ONLY the facts given for each clip. Never invent a game, a streamer or player "
+        "name, a score, a rank, a statistic or a result that is not given. If no game or name is "
+        "given, describe the moment itself. No emojis in titles. Keep the tone energetic but plain."
+        + _ANSWER
+    ),
+    "video": (
+        "You write social posts for a creator's short video clips. " + _ASK
+        + "Rules: use ONLY the facts given for each clip. Never invent a name, a place, a date, a "
+        "number, a quote or a result that is not given. If no name is given, describe the moment "
+        "itself. No emojis in titles. Keep the tone friendly and plain." + _ANSWER
+    ),
+}
+
 MAX_TOKENS = 4000
+
+
+def offer_kind(review: dict) -> str:
+    """The offer's kind. An offer made before kinds were stored was basketball."""
+    kind = str((review.get("summary") or {}).get("kind") or "basketball")
+    return kind if kind in INSTRUCTIONS_FOR else "video"
 
 
 def facts(review: dict, clip_rows: dict) -> list[dict]:
     """What the model is told about each clip: the pipeline's own findings."""
     from remote_approval.summary import scores_of
 
+    found = "play" if offer_kind(review) == "basketball" else "moment"
     out = []
     for entry in review["clips"]:
         row = clip_rows.get(entry["clip_id"])
         scores = scores_of(row) if row is not None else {}
         item = {
             "clip_id": entry["clip_id"],
-            "play": entry.get("label") or "highlight",
+            found: entry.get("label") or "highlight",
             "seconds": entry.get("duration"),
             "title_so_far": entry.get("title") or "",
         }
@@ -111,7 +147,7 @@ def generate(db, data_dir, review: dict, clip_rows: dict, *, model: str, send=No
         "max_completion_tokens": MAX_TOKENS,
         "reasoning_effort": "low",
         "messages": [
-            {"role": "developer", "content": INSTRUCTIONS},
+            {"role": "developer", "content": INSTRUCTIONS_FOR[offer_kind(review)]},
             {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
         ],
         "response_format": {"type": "json_schema",
@@ -202,6 +238,16 @@ def hashtags(values, *, limit: int = 6) -> list[str]:
 # ---- the text each platform gets ------------------------------------------------------
 
 
+def wording(kind: str) -> tuple[str, list[str]]:
+    """The title a clip with none of its own gets, and the hashtags an offer
+    of this kind adds. Only a basketball offer says basketball."""
+    if kind == "basketball":
+        return "Basketball highlight", ["basketball"]
+    if kind == "gaming":
+        return "Gaming highlight", ["gaming"]
+    return "Highlight", []
+
+
 def texts_for(review: dict, clip_row, entry: dict) -> dict:
     """{"title", "instagram", "facebook", "threads"} for one clip: Muse
     Spark's when there is some for these exact clips, otherwise the clip's
@@ -215,9 +261,14 @@ def texts_for(review: dict, clip_row, entry: dict) -> dict:
             own_tags = json.loads(clip_row["hashtags"] or "[]")
         except (TypeError, ValueError):
             own_tags = []
+    own_tags = own_tags if isinstance(own_tags, list) else []
+    kind = offer_kind(review)
+    fallback, added = wording(kind)
     if mine:
-        tags = hashtags([*mine["hashtags"], "basketball"], limit=8)
-        title = mine["title"] or entry.get("title") or entry.get("label") or "Basketball highlight"
+        # A gaming post keeps the clip's own hashtags too: the game's, and
+        # any the job was asked to put on every clip.
+        tags = hashtags([*mine["hashtags"], *added, *(own_tags if kind == "gaming" else [])], limit=8)
+        title = mine["title"] or entry.get("title") or entry.get("label") or fallback
         return {
             "title": title,
             "instagram": f"{mine['instagram']}\n\n{' '.join(tags)}".strip(),
@@ -226,9 +277,9 @@ def texts_for(review: dict, clip_row, entry: dict) -> dict:
             "source": "muse_spark",
         }
     title = (entry.get("title") or (clip_row["hook"] if clip_row is not None else "")
-             or entry.get("label") or "Basketball highlight").strip()
+             or entry.get("label") or fallback).strip()
     description = str(clip_row["description"] or "").strip() if clip_row is not None else ""
-    tags = hashtags([*(own_tags if isinstance(own_tags, list) else []), "basketball", "highlights"], limit=8)
+    tags = hashtags([*own_tags, *added, *(["highlights"] if kind == "basketball" else [])], limit=8)
     body = "\n\n".join(p for p in (title, description, " ".join(tags)) if p)
     return {
         "title": title[:100],

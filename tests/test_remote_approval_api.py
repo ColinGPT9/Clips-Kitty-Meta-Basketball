@@ -110,6 +110,15 @@ def test_bad_settings_are_refused(client):
     assert r.json()["settings"]["preferred_destinations"] == ["instagram"]
 
 
+def test_the_gaming_opt_in_is_saved_from_settings(client):
+    assert client.get("/remote-approval/status").json()["settings"]["basketball_only"] is True
+    r = client.patch("/remote-approval/settings", json={"basketball_only": False}, headers=HEADERS)
+    assert r.status_code == 200 and r.json()["settings"]["basketball_only"] is False
+    assert client.get("/remote-approval/status").json()["settings"]["basketball_only"] is False
+    r = client.patch("/remote-approval/settings", json={"basketball_only": True}, headers=HEADERS)
+    assert r.json()["settings"]["basketball_only"] is True
+
+
 def test_routes_that_need_the_relay_say_so_before_it_is_set_up(client):
     r = client.post("/remote-approval/pair/start", headers=HEADERS)
     assert r.status_code == 409 and "relay" in r.json()["detail"]

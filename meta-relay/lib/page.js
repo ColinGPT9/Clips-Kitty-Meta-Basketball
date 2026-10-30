@@ -57,20 +57,22 @@ function left(expiresAt, nowS) {
 function clipCard(c, token, { selectable, thumbs }) {
   const pic = thumbs.has(c.clip_id)
     ? `<img src="/a/${esc(token)}/thumb/${esc(c.clip_id)}" alt="">`
-    : `<div class="ph" aria-hidden="true">🏀</div>`;
+    : `<div class="ph" aria-hidden="true">&#9654;</div>`;
+  const posted = (c.published || []).map((p) => LABELS[p]).filter(Boolean);
+  const already = posted.length ? `<br><span class="small muted">Already posted to ${esc(posted.join(", "))}, so it is not posted there again.</span>` : "";
   const texts = c.texts || {};
   const preview = `<details><summary>What will be posted</summary>
 <pre><b>Instagram</b>\n${esc(texts.instagram)}\n\n<b>Facebook</b>\n${esc(texts.facebook)}\n\n<b>Threads</b>\n${esc(texts.threads)}</pre>
 <p class="small muted">${c.text_source === "muse_spark" ? "Written by Muse Spark from what Clips Kitty found." : "From the clip's own title and hashtags."}</p></details>`;
   const head = `<div><b>${esc(c.title || c.label || "Highlight")}</b><br>
-<span class="pill">${esc(c.label || c.category || "play")}</span><span class="small muted">${esc(Math.round(c.duration || 0))} s</span>${preview}</div>`;
+<span class="pill">${esc(c.label || c.category || "highlight")}</span><span class="small muted">${esc(Math.round(c.duration || 0))} s</span>${already}${preview}</div>`;
   if (!selectable) return `<div class="card clip">${pic}${head}</div>`;
   return `<label class="card row clip"><input type="checkbox" name="clip" value="${esc(c.clip_id)}" checked>${pic}${head}</label>`;
 }
 
 /** The page for an offer, in whatever state it is in. */
 export function approvalPage({ approval, payload, token, csrf, accounts, thumbs, nowS, error = "" }) {
-  const title = payload.title || "Your basketball video";
+  const title = payload.title || "Your video";
   const head = `<h1>${esc(title)}</h1><p class="muted">${esc(payload.summary_text || "")}</p>${payload.muse_line ? `<p class="small">${esc(payload.muse_line)} <span class="pill">Muse Spark</span></p>` : ""}`;
   const clips = payload.clips || [];
   const state = approval.state;

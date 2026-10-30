@@ -46,7 +46,9 @@ DEFAULTS = {
     # At most this many clips in one offer, best first: a full game can make
     # thirty, and each platform caps posts per day (Facebook Reels: 30).
     "max_clips": 10,
-    # Only basketball videos, which is what this edition is for.
+    # Only basketball videos, which is what this edition is for. Gaming and
+    # every other video are the creator's to opt in to (Settings: "Offer
+    # gaming and other videos too").
     "basketball_only": True,
     # Muse Spark writes the captions (one request per finished video, kept)
     # and, separately, may add a one-line summary to the message.
@@ -65,7 +67,7 @@ DEFAULTS = {
 EDITABLE = frozenset({
     "whatsapp_enabled", "relay_url", "notify_on_finish", "notify_on_fail", "notify_on_publish",
     "remote_approvals", "preferred_destinations", "approval_hours", "remind_minutes", "max_clips",
-    "muse_captions", "muse_summary", "muse_model",
+    "basketball_only", "muse_captions", "muse_summary", "muse_model",
 })
 
 

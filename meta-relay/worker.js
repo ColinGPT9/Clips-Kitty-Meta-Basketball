@@ -1,7 +1,7 @@
 /**
  * Clips Kitty Meta relay: the small Cloudflare Worker that sits between a
- * creator's phone and the Clips Kitty PC that renders their basketball
- * highlights. New for the Meta hackathon edition.
+ * creator's phone and the Clips Kitty PC that renders their highlights.
+ * New for the Meta hackathon edition.
  *
  * Why it exists. WhatsApp and Meta call webhooks and OAuth redirects on a
  * public HTTPS address, and Meta's app secret has to stay on a server. The
@@ -318,7 +318,7 @@ async function pairConfirm(env, device, body) {
   await run(env, "UPDATE recipients SET state = 'confirmed', updated_at = ? WHERE device_id = ?", now(), device.device_id);
   await audit(env, { device: device.device_id, actor: "pc", action: "pairing_confirmed", detail: `••${tail(r)}` });
   try {
-    await wa.sendText(env, r, "WhatsApp notifications from Clips Kitty are on. You'll get a message when a basketball video's highlights are ready. Reply STOP at any time to turn them off.");
+    await wa.sendText(env, r, "WhatsApp notifications from Clips Kitty are on. You'll get a message when a video's highlights are ready. Reply STOP at any time to turn them off.");
   } catch (e) {
     console.error("welcome not sent", e.code);
   }
@@ -384,6 +384,9 @@ function cleanClips(list) {
       label: String(c.label || "").slice(0, 60),
       category: String(c.category || "").slice(0, 30),
       duration: Math.round(Number(c.duration) || 0),
+      // Where the PC says this clip is already posted: shown on the page,
+      // and the PC does not post it there again.
+      published: PLATFORMS.filter((p) => Array.isArray(c.published) && c.published.includes(p)),
       text_source: c.text_source === "muse_spark" ? "muse_spark" : "clip",
       texts: {
         instagram: String(texts.instagram || "").slice(0, 2200),
@@ -405,7 +408,7 @@ async function notifyReady(env, device, prefs, body) {
   const reviewRef = Number(body.review_ref);
   if (!Number.isInteger(reviewRef) || reviewRef <= 0) throw new HttpError(400, "bad_request", "The offer has no reference.");
   const payload = {
-    title: String(body.title || "your basketball video").slice(0, 80),
+    title: String(body.title || "your video").slice(0, 80),
     summary_text: String(body.summary_text || "").slice(0, 300),
     muse_line: String(body.muse_line || "").slice(0, 160),
     preferred: (Array.isArray(body.preferred) ? body.preferred : []).filter((p) => PLATFORMS.includes(p)),
@@ -455,7 +458,7 @@ async function sendReady(env, recipient, approval, token) {
   // wrote to us within a day, so a plain interactive link is allowed.
   const wamid = await wa.sendLink(env, recipient, {
     header: "Highlights ready",
-    body: `Clips Kitty finished your basketball video ${wa.clean(payload.title)}. Highlights found: ${wa.clean(payload.summary_text)}. Review the clips and choose where to publish them.`,
+    body: `Clips Kitty finished your video ${wa.clean(payload.title)}. Ready to review: ${wa.clean(payload.summary_text)}. Choose where to publish them before the link expires.`,
     label: "Review clips",
     url,
     footer: "Reply STOP to turn these off",
@@ -470,7 +473,7 @@ function fallbackAllowed(e, recipient) {
 
 async function notifyFailed(env, device) {
   const recipient = await recipientFor(env, device);
-  const text = "Clips Kitty could not finish processing your basketball video. Open the app for details.";
+  const text = "Clips Kitty could not finish processing your video. Open the app for details.";
   return sendSimple(env, recipient, "ck_processing_failed", [], text, "failed");
 }
 

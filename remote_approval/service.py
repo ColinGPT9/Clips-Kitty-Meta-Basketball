@@ -156,10 +156,20 @@ def results_for(db, review: dict, jobs) -> dict:
     platforms = review["decision"].get("platforms") or []
     for clip_id in review["decision"].get("clips") or []:
         job = by_clip.get(clip_id)
-        rows = {r["platform"]: r for r in db.clip_publishes(clip_id) if r["provider"] == "meta"}
+        every = {r["platform"]: r for r in db.clip_publishes(clip_id)}
+        rows = {p: r for p, r in every.items() if r["provider"] == "meta"}
         entry = next((c for c in review["clips"] if c["clip_id"] == clip_id), {})
         posts = []
         for platform in platforms:
+            before = every.get(platform)
+            if before is not None and before["state"] == "published" and not (
+                    before["provider"] == "meta" and before["request_id"] == review["approval_id"]):
+                # Already posted there before this approval (an earlier offer,
+                # or another publisher): commands.queue_publishes left it out.
+                totals["skipped"] += 1
+                posts.append({"platform": platform, "state": "skipped", "url": "",
+                              "error": "Already posted there, so it was not posted again."})
+                continue
             row = rows.get(platform)
             state = row["state"] if row else "failed"
             error = row["error"] if row else (job["error"] if job else "") or "Not posted."
@@ -280,6 +290,8 @@ def build_body(db, data_dir, item: dict) -> dict:
                       "threads": text["threads"][:500]},
             "text_source": text["source"],
             "thumb": thumbnail(entry),
+            # Where it is already posted: the page says so, and it is not posted there again.
+            "published": list(entry.get("published") or []),
         })
     muse_line = (review.get("captions") or {}).get("summary", "") if config["muse_summary"] else ""
     return {
@@ -411,16 +423,35 @@ def send_test(db) -> bool:
 
 
 def ask_again(db, review_id: int) -> int | None:
-    """A new offer for an expired or cancelled one's job, with a new link."""
+    """A new offer for an expired or cancelled one's job, with a new link.
+
+    Of the clips that job's run made, by the same rule as its first offer
+    (notifier.clips_of_run), and only up to when it finished, so a later
+    run of the same video never joins it. A job cleared from the queue
+    since then has no times left to go by: its offer's own clips again."""
     from remote_approval import notifier
 
     old = store.get_review(db, review_id)
     if old is None or old["state"] not in (states.EXPIRED, states.CANCELLED):
         return None
     job = db.get_job(old["job_id"])
+    if job is None:
+        ids = {c["clip_id"] for c in old["clips"]}
+        clips = [c for c in (db.clips_for_video(old["video_id"]) if old["video_id"] else [])
+                 if int(c["id"]) in ids]
+    else:
+        # Up to when the run finished. A row without a finish time stops
+        # where the job's first offer was made, just after its run. Both are
+        # to the second, so up to the end of that second.
+        finished = notifier.job_time(job, "finished_at")
+        if finished is None:
+            first = store.parse(store.reviews_for_job(db, old["job_id"])[0]["created_at"])
+            finished = first.timestamp() if first is not None else None
+        clips = notifier.clips_of_run(db, old["video_id"], job,
+                                      until=None if finished is None else finished + 1)
     return notifier.offer(db, job_id=old["job_id"], video_id=old["video_id"],
-                          title=(job["title"] if job else "") or old["title"],
-                          clips=db.clips_for_video(old["video_id"]) if old["video_id"] else [])
+                          title=(job["title"] if job else "") or old["title"], clips=clips,
+                          kind=(old.get("summary") or {}).get("kind") or "basketball")
 
 
 def resend(db, review_id: int) -> bool:

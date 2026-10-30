@@ -201,7 +201,7 @@ describe("pairing", () => {
     await pc("POST", "/v1/pair/confirm", { confirm: true });
     status = (await pc("GET", "/v1/status")).data;
     assert.equal(status.pairing.state, "confirmed");
-    assert.match(fake.messages.at(-1).text.body, /Reply STOP/);
+    assert.match(fake.messages.at(-1).text.body, /when a video's highlights are ready\. Reply STOP/);
   });
 
   it("does not pair on a wrong code, and ignores strangers", async () => {
@@ -269,6 +269,7 @@ describe("offers and approval", () => {
     const msg = fake.messages.at(-1);
     assert.equal(msg.interactive.type, "cta_url");
     assert.match(msg.interactive.action.parameters.url, /^https:\/\/relay\.test\/a\//);
+    assert.match(msg.interactive.body.text, /^Clips Kitty finished your video .+\. Ready to review: 3 clips: 2 dunks and 1 three\. Choose where to publish them before the link expires\.$/);
   });
 
   it("approves only with the PIN, the confirm tick and real choices", async () => {
@@ -459,6 +460,19 @@ describe("offers and approval", () => {
     assert.equal((await commands()).filter((c) => c.kind === "approve").length, 0);
   });
 
+  it("words the page for any video and says where a clip is already posted", async () => {
+    const clips = offer().clips.map((c) => ({ ...c, label: "", category: "highlight" }));
+    clips[1].published = ["instagram", "tiktok", "instagram"];
+    await pc("POST", "/v1/notify", offer({ title: "", clips }));
+    const view = (await page(tokenFrom(fake.messages.at(-1)))).text;
+    assert.match(view, /<h1>your video<\/h1>/);
+    assert.match(view, /<span class="pill">highlight<\/span>/);
+    assert.match(view, /Already posted to Instagram Reels, so it is not posted there again\./);
+    assert.equal(view.match(/Already posted to/g).length, 1);
+    assert.doesNotMatch(view, /tiktok|🏀/i);
+    assert.match(view, /<div class="ph" aria-hidden="true">&#9654;<\/div>/); // no thumbnail: a neutral placeholder
+  });
+
   it("keeps the approval page read-only when remote approval is off", async () => {
     await pc("POST", "/v1/preferences", { remote_approvals: false });
     await pc("POST", "/v1/notify", offer());
@@ -494,9 +508,12 @@ describe("accounts", () => {
     const ready = fake.templates.find((t) => t.name === "ck_highlights_ready");
     const body = ready.components.find((c) => c.type === "BODY").text;
     assert.doesNotMatch(body, /^\{\{|\}\}$/);
+    assert.equal(body, "Clips Kitty finished your video {{1}}. Ready to review: {{2}}. Choose where to publish them before the link expires.");
     assert.equal(ready.category, "UTILITY");
     const failed = fake.templates.find((t) => t.name === "ck_processing_failed");
-    assert.equal(failed.components[0].text, "Clips Kitty could not finish processing your basketball video. Open the app for details.");
+    assert.equal(failed.components[0].text, "Clips Kitty could not finish processing your video. Open the app for details.");
+    // Every video, not only basketball: no template says what kind it was.
+    assert.doesNotMatch(JSON.stringify(fake.templates), /basketball|dunk/i);
   });
 });
 
