@@ -8,8 +8,11 @@ route ever returns it. The creator's phone number never reaches this PC at
 all: pairing happens on the relay, which only tells us its last four digits,
 for "Is this your number?".
 
-Remote approval is off until switched on, and needs WhatsApp notifications,
-a confirmed pairing and an approval PIN first (service.can_enable).
+Remote approval is off until switched on, and needs an approval PIN and a
+way to reach the creator first: WhatsApp notifications with a confirmed
+pairing, or a connected Muse agent (service.can_enable_remote_approval).
+The key Muse uses is never kept here either: the relay holds its hash, and
+this PC hands the key to Settings once (remote_approval_api.py).
 """
 
 import json
@@ -60,6 +63,7 @@ DEFAULTS = {
     "pin_set": False,
     "accounts": {},     # {"instagram": {"connected": true, "name": "@..."}, ...}
     "templates": {},    # {"ck_highlights_ready": "APPROVED", ...}
+    "muse": {},         # {"enabled": true, "created_at": 1730000000, "last_used": 0}: never the key
 }
 
 #: Keys a settings PATCH from the UI may change. The rest are written by the
@@ -110,6 +114,12 @@ def _clean(key: str, value):
     if key in DEFAULTS and isinstance(DEFAULTS[key], bool):
         return bool(value)
     return value
+
+
+def muse_connected(config: dict) -> bool:
+    """Whether the relay last said a Muse key works for this PC. Offers are
+    then made and kept for Muse even with WhatsApp off."""
+    return bool((config.get("muse") or {}).get("enabled"))
 
 
 def _bounded(value, low: int, high: int, default: int) -> int:

@@ -11,6 +11,11 @@ digits only).
 Nothing here listens for the phone: the PC only ever calls out to the
 creator's relay (remote_approval/relay.py), so this engine stays on
 127.0.0.1. Every route is internal (server/api_stability.py).
+
+The creator's Muse agent talks to the relay, never to this engine. The key
+it uses is made here (POST /remote-approval/muse/token) and passes through
+to Settings once: it is not stored, logged or put in the outbox, and no
+other route returns it.
 """
 
 from fastapi import Depends, Header, HTTPException
@@ -220,6 +225,58 @@ def install(app, *, db, data_dir, session_secret: str, publish_worker=None) -> N
         finally:
             d.close()
         changed("pin")
+        return out
+
+    def muse_fail(e: RelayError) -> HTTPException:
+        if e.status == 404:  # a relay deployed before the Muse connector
+            return HTTPException(409, "Your relay is older than this version of Clips Kitty. Deploy it again to "
+                                      "connect Muse.")
+        return _fail(e)
+
+    @app.post("/remote-approval/muse/token", dependencies=guarded)
+    def remote_muse_token():
+        """A new key for the creator's Muse agent, replacing any older one.
+        In this answer once, for Settings to show; the relay keeps only its
+        hash and this PC keeps nothing."""
+        d = db()
+        try:
+            relay = relay_for(d)
+            try:
+                key = service.make_muse_key(d, relay)
+            except RelayError as e:
+                raise muse_fail(e) from None
+            try:
+                # Whether WhatsApp is wanted at all decides where offers go
+                # now that Muse can carry them.
+                service.push_preferences(d, relay)
+            except RelayError:
+                pass  # the key is made; the next settings change sends these again
+            out = {**status(d), "key": key}
+        finally:
+            d.close()
+        changed("muse")
+        return out
+
+    @app.post("/remote-approval/muse/revoke", dependencies=guarded)
+    def remote_muse_revoke():
+        d = db()
+        try:
+            relay = relay_for(d)
+            try:
+                service.revoke_muse_key(d, relay)
+            except RelayError as e:
+                raise muse_fail(e) from None
+            try:
+                service.push_preferences(d, relay)
+            except RelayError:
+                # The key has stopped working, which is what Settings asked. An
+                # error here would say it hadn't; the next settings change sends
+                # these again.
+                pass
+            out = status(d)
+        finally:
+            d.close()
+        changed("muse")
         return out
 
     @app.post("/remote-approval/test", dependencies=guarded)

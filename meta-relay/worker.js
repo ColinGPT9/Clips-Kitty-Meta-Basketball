@@ -22,6 +22,10 @@
  * under the command the PC accepted, within a day of the approval, and
  * only bytes the PC chooses to send it.
  *
+ * The creator's Muse agent reads offers here too, as a custom connector
+ * (lib/muse.js), with a key the PC made. It can hand out the approval link,
+ * defer and cancel; it can never approve or publish.
+ *
  * Routes
  *   GET  /health
  *   GET  /webhook                 WhatsApp verification (hub.challenge)
@@ -30,6 +34,8 @@
  *   POST /a/:token                approve (PIN + confirm), remind me later, cancel
  *   GET  /a/:token/thumb/:clip    a clip's thumbnail
  *   GET  /oauth/facebook/callback, POST /oauth/facebook/choose, GET /oauth/threads/callback
+ *   POST /mcp, /muse/v1/...       the Muse connector (a Muse key, lib/muse.js)
+ *   GET  /muse, /muse/openapi.json  how to connect Muse, and the REST routes described
  *   POST /v1/devices              register a PC (ENROLL_KEY bearer)
  *   *    /v1/...                  everything else the PC does, HMAC-signed
  *
@@ -41,8 +47,9 @@
  */
 
 import { b64url, canonical, hmacHex, hmacVerify, pinHash, randomId, randomToken, safeEqual, seal, sha256Hex, unseal } from "./lib/crypto.js";
-import { all, audit, now, one, parse, run } from "./lib/db.js";
+import { addCommand, all, audit, iso, now, one, parse, pinBlocked, prefsOf, run } from "./lib/db.js";
 import * as meta from "./lib/meta.js";
+import * as muse from "./lib/muse.js";
 import * as page from "./lib/page.js";
 import * as wa from "./lib/whatsapp.js";
 
@@ -130,6 +137,11 @@ async function route(request, env, ctx) {
   if (path === "/oauth/facebook/callback" && method === "GET") return facebookCallback(env, url);
   if (path === "/oauth/facebook/choose" && method === "POST") return facebookPagePicked(request, env);
   if (path === "/oauth/threads/callback" && method === "GET") return threadsCallback(env, url);
+  if (muse.handles(path)) return muse.route(request, env, url);
+  if (path.startsWith("/v1/") && /^Bearer\s+ckm_/i.test(request.headers.get("Authorization") || "")) {
+    // A Muse key reads offers through /mcp and /muse/v1 only. It never stands in for the PC.
+    throw new HttpError(401, "forbidden", "A Muse key can't call this PC's routes.");
+  }
   if (path === "/v1/devices" && method === "POST") return enroll(request, env);
   if (path.startsWith("/v1/")) {
     const auth = await authenticate(request, env, url);
@@ -151,6 +163,8 @@ async function deviceRoute(request, env, url, auth) {
   if (path === "/v1/pair/confirm" && method === "POST") return json(await pairConfirm(env, device, body));
   if (path === "/v1/pin" && method === "POST") return json(await setPin(env, device, body));
   if (path === "/v1/disconnect" && method === "POST") return json(await unpair(env, device));
+  if (path === "/v1/muse/token" && method === "POST") return json(await museToken(env, device));
+  if (path === "/v1/muse/revoke" && method === "POST") return json(await museRevoke(env, device));
   if (path === "/v1/notify" && method === "POST") return json(await notify(env, device, body));
   if (path === "/v1/commands" && method === "GET") return json(await pendingCommands(env, device));
   let m = path.match(/^\/v1\/commands\/(cmd_[0-9a-f]{24})\/ack$/);
@@ -247,6 +261,7 @@ async function status(env, device) {
     whatsapp: { configured: Boolean(env.WHATSAPP_TOKEN && env.WHATSAPP_PHONE_NUMBER_ID) },
     logins: { facebook: Boolean(env.META_APP_ID && env.META_APP_SECRET), threads: Boolean(env.THREADS_APP_ID && env.THREADS_APP_SECRET) },
     open_approvals: open ? open.n : 0,
+    muse: await muse.keyStatus(env, device.device_id),
   };
 }
 
@@ -259,14 +274,14 @@ const PREF_KEYS = ["notify_on_finish", "notify_on_fail", "notify_on_publish", "r
 async function preferences(env, device, body) {
   const prefs = {};
   for (const k of PREF_KEYS) prefs[k] = Boolean(body[k]);
+  // Off means offers are kept for Muse and nothing goes to WhatsApp. A PC
+  // from before this setting never sends it, and only ever sent anything
+  // with WhatsApp on.
+  prefs.whatsapp_enabled = body.whatsapp_enabled === undefined ? true : Boolean(body.whatsapp_enabled);
   prefs.preferred = (Array.isArray(body.preferred) ? body.preferred : []).filter((p) => PLATFORMS.includes(p));
   prefs.remind_minutes = Math.max(15, Math.min(1440, Number(body.remind_minutes) || 120));
   await run(env, "UPDATE devices SET prefs = ? WHERE device_id = ?", JSON.stringify(prefs), device.device_id);
   return { prefs };
-}
-
-function prefsOf(device) {
-  return { notify_on_finish: true, notify_on_fail: true, notify_on_publish: true, remote_approvals: false, preferred: [], remind_minutes: 120, ...parse(device.prefs || "{}", {}) };
 }
 
 // ---- pairing a WhatsApp number --------------------------------------------------
@@ -334,6 +349,8 @@ async function setPin(env, device, body) {
   const salt = b64url(crypto.getRandomValues(new Uint8Array(16)));
   await run(env, "UPDATE devices SET pin_hash = ?, pin_salt = ?, pin_fails = 0, pin_locked_until = 0 WHERE device_id = ?",
     await pinHash(pin, salt), salt, device.device_id);
+  // A new PIN from the PC is what lifts a block on approving from the phone.
+  await run(env, "DELETE FROM pin_lockouts WHERE device_id = ?", device.device_id);
   await audit(env, { device: device.device_id, actor: "pc", action: "pin_set" });
   return { pin_set: true };
 }
@@ -341,8 +358,25 @@ async function setPin(env, device, body) {
 async function unpair(env, device) {
   await run(env, "DELETE FROM recipients WHERE device_id = ?", device.device_id);
   await run(env, "UPDATE approvals SET state = 'cancelled', updated_at = ? WHERE device_id = ? AND state IN ('open', 'deferred')", now(), device.device_id);
+  await muse.revokeKeys(env, device.device_id);
   await audit(env, { device: device.device_id, actor: "pc", action: "whatsapp_disconnected" });
   return { pairing: { state: "none" } };
+}
+
+// ---- the creator's Muse agent ---------------------------------------------------
+
+async function museToken(env, device) {
+  // The key goes back once, in this answer, for Settings to show. Only its
+  // hash is kept (lib/muse.js), and any older key stops working.
+  const key = await muse.mintKey(env, device.device_id);
+  await audit(env, { device: device.device_id, actor: "pc", action: "muse_key_made" });
+  return { key, muse: await muse.keyStatus(env, device.device_id) };
+}
+
+async function museRevoke(env, device) {
+  const revoked = await muse.revokeKeys(env, device.device_id);
+  if (revoked) await audit(env, { device: device.device_id, actor: "pc", action: "muse_key_revoked" });
+  return { revoked: revoked > 0, muse: await muse.keyStatus(env, device.device_id) };
 }
 
 async function recipientFor(env, device) {
@@ -397,8 +431,27 @@ function cleanClips(list) {
   });
 }
 
+/**
+ * Who hears about a new offer: the paired WhatsApp number, when the PC has
+ * WhatsApp messages on. Otherwise null, when a Muse key is active: the offer
+ * is only kept, for the creator's Muse agent to read. Neither: the reason.
+ */
+async function readyRecipient(env, device, prefs) {
+  let why = new HttpError(409, "no_channel", "WhatsApp messages are off on your PC and Muse is not connected, so nothing can tell you about this offer.");
+  if (prefs.whatsapp_enabled) {
+    try {
+      return await recipientFor(env, device);
+    } catch (e) {
+      if (!(e instanceof HttpError)) throw e;
+      why = e;
+    }
+  }
+  if (await muse.activeKey(env, device.device_id)) return null;
+  throw why;
+}
+
 async function notifyReady(env, device, prefs, body) {
-  const recipient = await recipientFor(env, device);
+  const recipient = await readyRecipient(env, device, prefs);
   const clips = cleanClips(body.clips);
   const ids = new Set(clips.map((c) => c.clip_id));
   if (ids.size !== clips.length) throw new HttpError(400, "bad_request", "A clip appears twice.");
@@ -410,6 +463,7 @@ async function notifyReady(env, device, prefs, body) {
   const payload = {
     title: String(body.title || "your video").slice(0, 80),
     summary_text: String(body.summary_text || "").slice(0, 300),
+    kind: ["basketball", "gaming", "video"].includes(body.video_kind) ? body.video_kind : "",
     muse_line: String(body.muse_line || "").slice(0, 160),
     preferred: (Array.isArray(body.preferred) ? body.preferred : []).filter((p) => PLATFORMS.includes(p)),
     remind_minutes: Math.max(15, Math.min(1440, Number(body.remind_minutes) || prefs.remind_minutes)),
@@ -426,6 +480,13 @@ async function notifyReady(env, device, prefs, body) {
     if (jpeg && jpeg.length < 82000 && /^[A-Za-z0-9+/=]+$/.test(jpeg) && ids.has(Number(c.clip_id))) {
       await run(env, "INSERT OR REPLACE INTO thumbs (approval_id, clip_id, jpeg) VALUES (?, ?, ?)", id, Number(c.clip_id), jpeg);
     }
+  }
+  if (!recipient) {
+    // Kept for Muse, and nothing sent. Marked sent all the same, so opening
+    // the page from the link Muse gives tells the PC it was seen.
+    await run(env, "UPDATE approvals SET delivery = 'sent' WHERE id = ?", id);
+    await audit(env, { device: device.device_id, approval: id, actor: "relay", action: "offer_kept", detail: `${clips.length} clips for Muse` });
+    return { approval_id: id, channel: "muse", message_id: "", expires_at: new Date(expires * 1000).toISOString() };
   }
   let sent;
   try {
@@ -521,8 +582,11 @@ async function notifyResult(env, device, prefs, body) {
   const results = cleanResults(body.results);
   await run(env, "UPDATE approvals SET state = 'done', results = ?, updated_at = ? WHERE id = ?", JSON.stringify(results), now(), approval.id);
   await audit(env, { device: device.device_id, approval: approval.id, actor: "pc", action: "results", detail: JSON.stringify(results.totals) });
-  if (!prefs.notify_on_publish) return { channel: "", skipped: true };
-  const recipient = await recipientFor(env, device);
+  // Kept either way, for the status page and Muse. A message only when the
+  // PC wants one and a confirmed number can take it.
+  if (!prefs.notify_on_publish || !prefs.whatsapp_enabled) return { channel: "", skipped: true };
+  const recipient = await one(env, "SELECT * FROM recipients WHERE device_id = ? AND state = 'confirmed'", device.device_id);
+  if (!recipient) return { channel: "", skipped: true };
   const payload = parse(approval.payload, {});
   const token = await unseal(env, approval.token_enc);
   const line = String(body.text || "").slice(0, 200) || `${results.totals.published} posts published`;
@@ -564,13 +628,6 @@ async function safeTemplates(env, create) {
 }
 
 // ---- commands for the PC -----------------------------------------------------------
-
-async function addCommand(env, deviceId, approvalId, kind, body) {
-  const id = randomId("cmd");
-  await run(env, "INSERT INTO commands (id, device_id, approval_id, kind, body, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-    id, deviceId, approvalId, kind, JSON.stringify(body), now());
-  return id;
-}
 
 async function pendingCommands(env, device) {
   const rows = await all(env, "SELECT * FROM commands WHERE device_id = ? AND state = 'pending' ORDER BY created_at, id LIMIT 20", device.device_id);
@@ -630,8 +687,29 @@ async function renderOffer(env, approval, token, error = "", statusCode = 200) {
   const thumbs = new Set((await all(env, "SELECT clip_id FROM thumbs WHERE approval_id = ?", approval.id)).map((r) => r.clip_id));
   return html(page.approvalPage({
     approval, payload, token, csrf: await csrfFor(env, approval), accounts: await meta.accountsFor(env, approval.device_id),
-    thumbs, nowS: now(), error,
+    thumbs, nowS: now(), error, blocked: await pinBlocked(env, approval.device_id),
   }), statusCode);
+}
+
+/**
+ * Once five tries are used up: the quarter-hour lock, noted for pinBlocked
+ * (lib/db.js). Only one try can start it, since the same write puts the
+ * count back to zero. The page to show when this lock is the one that
+ * blocks approving from the phone, else null.
+ */
+async function lockPin(env, device, approval, token) {
+  const started = await run(env, "UPDATE devices SET pin_fails = 0, pin_locked_until = ? WHERE device_id = ? AND pin_fails >= ?",
+    now() + PIN_LOCK, device.device_id, PIN_MAX_FAILS);
+  if (!started) return null;
+  await run(env, "INSERT INTO pin_lockouts (device_id, at) VALUES (?, ?)", device.device_id, now());
+  if (!(await pinBlocked(env, device.device_id))) return null;
+  await audit(env, { device: device.device_id, approval: approval.id, actor: "relay", action: "pin_blocked" });
+  return renderOffer(env, approval, token, page.PIN_BLOCKED, 403);
+}
+
+function pinLocked(env, approval, token, until) {
+  const mins = Math.max(1, Math.ceil((until - now()) / 60));
+  return renderOffer(env, approval, token, `Too many wrong PINs. Try again in ${mins} minute${mins === 1 ? "" : "s"}.`, 429);
 }
 
 async function showOffer(env, token) {
@@ -665,7 +743,7 @@ async function decide(request, env, token) {
   }
   const form = await request.formData();
   if (!(await hmacVerify(env.TOKEN_KEY, `csrf:${approval.id}:${approval.token_hash}`, String(form.get("csrf") || "")))) {
-    return html(page.message("Not allowed", "This page is out of date. Open the link from WhatsApp again."), 403);
+    return html(page.message("Not allowed", "This page is out of date. Open the link again."), 403);
   }
   if (!["open", "deferred"].includes(approval.state) || approval.expires_at <= now()) return renderOffer(env, approval, token);
   const device = await one(env, "SELECT * FROM devices WHERE device_id = ?", approval.device_id);
@@ -694,21 +772,29 @@ async function decide(request, env, token) {
 
   if (!approval.remote_ok) return renderOffer(env, approval, token, "Approving from your phone is switched off on your PC.", 400);
   if (!device || !device.pin_hash) return renderOffer(env, approval, token, "Set an approval PIN in Clips Kitty first.", 400);
-  if (device.pin_locked_until > now()) {
-    const mins = Math.ceil((device.pin_locked_until - now()) / 60);
-    return renderOffer(env, approval, token, `Too many wrong PINs. Try again in ${mins} minute${mins === 1 ? "" : "s"}.`, 429);
+  if (await pinBlocked(env, device.device_id)) return renderOffer(env, approval, token, page.PIN_BLOCKED, 403);
+  if (device.pin_locked_until > now()) return pinLocked(env, approval, token, device.pin_locked_until);
+  // A try is counted before its PIN is checked, in one write that also
+  // checks the lock. Counted after the check, tries sent all at once each
+  // read the count before any of them wrote it, so all of them were checked
+  // and the lock never started. This way each takes its own place in the
+  // count, and a burst gets the same five tries as one try at a time.
+  const counted = await run(env, "UPDATE devices SET pin_fails = pin_fails + 1 WHERE device_id = ? AND pin_fails < ? AND pin_locked_until <= ?",
+    device.device_id, PIN_MAX_FAILS, now());
+  if (!counted) {
+    // Five tries are already out. If none of them has started the lock yet
+    // (they are still being checked, or one was cut off), this one starts
+    // it, so the count can't stick at five with nothing locked.
+    const blocked = await lockPin(env, device, approval, token);
+    if (blocked) return blocked;
+    const fresh = await one(env, "SELECT pin_locked_until FROM devices WHERE device_id = ?", device.device_id);
+    return pinLocked(env, approval, token, fresh ? fresh.pin_locked_until : 0);
   }
   const pin = String(form.get("pin") || "");
   const good = /^\d{4,8}$/.test(pin) && (await safeEqual(await pinHash(pin, device.pin_salt), device.pin_hash));
   if (!good) {
-    const fails = device.pin_fails + 1;
-    if (fails >= PIN_MAX_FAILS) {
-      await run(env, "UPDATE devices SET pin_fails = 0, pin_locked_until = ? WHERE device_id = ?", now() + PIN_LOCK, device.device_id);
-    } else {
-      await run(env, "UPDATE devices SET pin_fails = ? WHERE device_id = ?", fails, device.device_id);
-    }
     await audit(env, { device: device.device_id, approval: approval.id, actor: "phone", action: "pin_wrong" });
-    return renderOffer(env, approval, token, "That PIN is not right. Nothing was approved.", 403);
+    return (await lockPin(env, device, approval, token)) || renderOffer(env, approval, token, "That PIN is not right. Nothing was approved.", 403);
   }
   await run(env, "UPDATE devices SET pin_fails = 0 WHERE device_id = ?", device.device_id);
   if (form.get("confirm") !== "yes") return renderOffer(env, approval, token, "Tick the box to confirm the clips should be posted publicly.", 400);
@@ -734,10 +820,6 @@ async function decide(request, env, token) {
   });
   await audit(env, { device: approval.device_id, approval: approval.id, actor: "phone", action: "approved", detail: `${clips.length} clips to ${platforms.join(", ")}` });
   return redirect(`/a/${token}`);
-}
-
-function iso(seconds) {
-  return new Date(seconds * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
 // ---- WhatsApp webhook ------------------------------------------------------------------
@@ -1023,8 +1105,12 @@ export async function cron(env) {
     }
   }
   for (const a of await all(env, "SELECT * FROM approvals WHERE state = 'deferred' AND remind_at > 0 AND remind_at <= ? AND expires_at > ?", t, t)) {
+    // Only a WhatsApp number gets a reminder. With none, or WhatsApp off on
+    // the PC, remind_at stays for Muse to read (lib/muse.js).
     const recipient = await one(env, "SELECT * FROM recipients WHERE device_id = ? AND state = 'confirmed'", a.device_id);
     if (!recipient) continue;
+    const device = await one(env, "SELECT prefs FROM devices WHERE device_id = ?", a.device_id);
+    if (!device || !prefsOf(device).whatsapp_enabled) continue;
     const changed = await run(env, "UPDATE approvals SET state = 'open', remind_at = 0, updated_at = ? WHERE id = ? AND state = 'deferred'", t, a.id);
     if (!changed) continue;
     try {

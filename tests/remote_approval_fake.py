@@ -67,6 +67,9 @@ class FakeRelay:
         self.accounts = {"instagram": {"connected": True, "name": "@hoopsdaily"},
                          "facebook": {"connected": True, "name": "Hoops Daily"},
                          "threads": {"connected": True, "name": "@hoopsdaily"}}
+        # The relay's word on a Muse key: never the key itself.
+        self.muse = {"enabled": False, "created_at": 0, "last_used": 0}
+        self.keys = []
 
     def _maybe_fail(self, name):
         if name in self.fail:
@@ -76,7 +79,7 @@ class FakeRelay:
         self.calls.append(("status",))
         self._maybe_fail("status")
         return {"pairing": {"state": "confirmed", "tail": "4567"}, "pin_set": True,
-                "accounts": self.accounts, "templates": {"ck_highlights_ready": "APPROVED"}}
+                "accounts": self.accounts, "templates": {"ck_highlights_ready": "APPROVED"}, "muse": self.muse}
 
     def notify(self, body):
         self.calls.append(("notify", body["kind"]))
@@ -99,8 +102,23 @@ class FakeRelay:
 
     def preferences(self, prefs):
         self.calls.append(("preferences", prefs))
+        self._maybe_fail("preferences")
         return {"prefs": prefs}
 
     def cancel(self, approval_id):
         self.calls.append(("cancel", approval_id))
         return {"cancelled": True}
+
+    def muse_token(self):
+        self.calls.append(("muse_token",))
+        self._maybe_fail("muse_token")
+        key = "ckm_" + os.urandom(24).hex()[:43]
+        self.keys.append(key)
+        self.muse = {"enabled": True, "created_at": 1_800_000_000, "last_used": 0}
+        return {"key": key, "muse": self.muse}
+
+    def muse_revoke(self):
+        self.calls.append(("muse_revoke",))
+        self._maybe_fail("muse_revoke")
+        self.muse = {"enabled": False, "created_at": 0, "last_used": 0}
+        return {"revoked": True, "muse": self.muse}

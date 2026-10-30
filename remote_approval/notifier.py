@@ -34,8 +34,9 @@ STAMP_SLACK = 0.05
 
 def on_job_finished(db, job, status: str, *, started: float | None = None, data_dir=None) -> int | None:
     """Queue what this finished job should tell the creator. Returns the new
-    offer's id, or None when nothing was offered (switched off, a video the
-    settings leave out, nothing found, or a failure notice instead).
+    offer's id, or None when nothing was offered (neither WhatsApp nor Muse
+    on, a video the settings leave out, nothing found, or a failure notice
+    instead).
 
     `started` is when the worker began the job (time.time()), when it knows:
     finer than the row's started_at, so a run straight after another never
@@ -43,7 +44,10 @@ def on_job_finished(db, job, status: str, *, started: float | None = None, data_
     folder, where an installed plugin says whether it is a game's own
     pipeline (summary.kind_of)."""
     config = ra_settings.load(db)
-    if not config["whatsapp_enabled"] or job["type"] != "process":
+    # Offers reach the creator on WhatsApp, or through their Muse agent with
+    # WhatsApp off (the relay keeps them for it). Either one is enough.
+    whatsapp = bool(config["whatsapp_enabled"])
+    if not (whatsapp or ra_settings.muse_connected(config)) or job["type"] != "process":
         return None
     try:
         payload = json.loads(job["payload"] or "{}")
@@ -59,9 +63,10 @@ def on_job_finished(db, job, status: str, *, started: float | None = None, data_
         return None
 
     if status == "failed":
-        if config["notify_on_fail"]:
+        if config["notify_on_fail"] and whatsapp:
             # Never the error itself: it can name paths, and the phone is not
-            # where it is read. The app shows it.
+            # where it is read. The app shows it. A WhatsApp message only:
+            # there is no offer for Muse to find.
             store.enqueue(db, f"failed:job:{job['id']}", "failed", body={"job_id": int(job["id"])})
         return None
     if status != "done" or not config["notify_on_finish"]:

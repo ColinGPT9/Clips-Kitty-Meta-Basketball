@@ -85,7 +85,7 @@ def record_whatsapp(db, channel: str) -> None:
     if channel == "template":
         w["templates"] += 1
         w["usd"] = round(w["usd"] + WHATSAPP_UTILITY, 6)
-    elif channel:
+    elif channel and channel != "muse":  # an offer kept for Muse sent no message
         w["free_form"] += 1
     _save(db, data)
 

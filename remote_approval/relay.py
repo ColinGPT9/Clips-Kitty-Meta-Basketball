@@ -163,6 +163,18 @@ class Relay:
     def disconnect(self) -> dict:
         return self.call("POST", "/v1/disconnect", {})
 
+    # ---- the creator's Muse agent -------------------------------------------
+
+    def muse_token(self) -> dict:
+        """A new key for the creator's Muse agent, replacing any older one:
+        {"key": "ckm_...", "muse": {...}}. The answer is the only place the
+        key ever is: the relay keeps its hash, and this PC passes it to
+        Settings once and keeps nothing."""
+        return self.call("POST", "/v1/muse/token", {})
+
+    def muse_revoke(self) -> dict:
+        return self.call("POST", "/v1/muse/revoke", {})
+
     # ---- notifications and decisions ----------------------------------------
 
     def notify(self, body: dict) -> dict:
@@ -174,9 +186,6 @@ class Relay:
     def ack(self, command_id: str, outcome: str, reason: str = "") -> dict:
         return self.call("POST", f"/v1/commands/{quote(command_id)}/ack",
                          {"outcome": outcome, "reason": reason[:300]})
-
-    def results(self, approval_id: str, body: dict) -> dict:
-        return self.call("POST", f"/v1/approvals/{quote(approval_id)}/results", body)
 
     def cancel(self, approval_id: str) -> dict:
         return self.call("POST", f"/v1/approvals/{quote(approval_id)}/cancel", {})

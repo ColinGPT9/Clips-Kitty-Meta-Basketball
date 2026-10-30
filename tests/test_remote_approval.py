@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 import pytest
 from remote_approval_fake import SECRET, FakeRelay, finished_job, sign_command
 
-from remote_approval import captions, commands, notifier, service, states, store, summary
+from remote_approval import captions, commands, notifier, service, states, store, summary, usage
 from remote_approval import settings as ra_settings
 from remote_approval.relay import RelayError
 
@@ -866,3 +866,119 @@ def test_remote_approval_needs_pairing_and_a_pin_first(db, tmp_path):
     assert "PIN" in service.can_enable_remote_approval(db)
     ra_settings.save(db, {"pin_set": True}, internal=True)
     assert service.can_enable_remote_approval(db) == ""
+
+
+# ---- the creator's Muse agent -------------------------------------------------------------
+
+
+@pytest.fixture
+def muse_only(db, tmp_path):
+    """No WhatsApp at all: the PC registered, a Muse key working, a PIN set,
+    every platform connected, remote approval on."""
+    ra_settings.save(db, {"relay_url": "https://relay.test", "remote_approvals": True})
+    ra_settings.save(db, {"pin_set": True, "accounts": FakeRelay().accounts,
+                          "muse": {"enabled": True, "created_at": 1_800_000_000, "last_used": 0}}, internal=True)
+    from core import secrets
+
+    secrets.save(tmp_path, ra_settings.DEVICE_SECRET, {"device_id": "dev_0123456789abcdef", "device_secret": SECRET})
+    return tmp_path
+
+
+def test_a_connected_muse_stands_in_for_a_paired_number_but_the_pin_is_still_asked(db, tmp_path):
+    assert "Muse" in service.can_enable_remote_approval(db)
+    ra_settings.save(db, {"muse": {"enabled": True}}, internal=True)
+    assert "PIN" in service.can_enable_remote_approval(db)
+    ra_settings.save(db, {"pin_set": True}, internal=True)
+    assert service.can_enable_remote_approval(db) == ""
+
+
+def test_offers_reach_muse_with_whatsapp_off_but_a_failure_message_does_not(db, muse_only):
+    review_id = notifier.on_job_finished(db, finished_job(db, muse_only), "done")
+    assert store.get_review(db, review_id)["state"] == states.NOTIFICATION_PENDING
+    failed = finished_job(db, muse_only, title="Some Team vs Away Team")
+    db.finish_job(failed["id"], "failed", "out of memory")
+    assert notifier.on_job_finished(db, db.get_job(failed["id"]), "failed") is None
+    assert [item["kind"] for item in store.due_outbox(db)] == ["ready"]  # no failure message: there is no WhatsApp
+    ra_settings.save(db, {"notify_on_finish": False})
+    assert notifier.on_job_finished(db, finished_job(db, muse_only, title="Third Game"), "done") is None
+    ra_settings.save(db, {"notify_on_finish": True})
+    ra_settings.save(db, {"muse": {}}, internal=True)  # the key revoked: nothing can reach the creator now
+    assert notifier.on_job_finished(db, finished_job(db, muse_only, title="Fourth Game"), "done") is None
+
+
+def test_the_loop_runs_for_muse_alone_and_stops_when_neither_is_on(db, muse_only):
+    relay = FakeRelay()
+    relay.muse = {"enabled": True, "created_at": 1_800_000_000, "last_used": 1_800_000_100}
+    review_id = notifier.on_job_finished(db, finished_job(db, muse_only), "done")
+    service.tick(db, muse_only, service.TickState(), relay=relay, clock=lambda: 1000.0)
+    assert store.get_review(db, review_id)["state"] == states.NOTIFICATION_SENT
+    assert relay.notified[0]["video_kind"] == "basketball"
+    assert ra_settings.load(db)["muse"] == relay.muse  # what the relay said, read on the pass
+    ra_settings.save(db, {"muse": {}}, internal=True)
+    quiet = FakeRelay()
+    assert service.tick(db, muse_only, service.TickState(), relay=quiet, clock=lambda: 1000.0) == 0
+    assert quiet.calls == []
+
+
+def test_the_relay_is_told_whether_whatsapp_is_wanted(db, muse_only):
+    relay = FakeRelay()
+    service.push_preferences(db, relay)
+    prefs = next(call[1] for call in relay.calls if call[0] == "preferences")
+    assert prefs["whatsapp_enabled"] is False and prefs["notify_on_finish"] is True
+
+
+def test_results_go_to_the_relay_even_with_publishing_messages_off(db, on):
+    """The relay keeps them for the status page and for Muse's "what got
+    posted?"; it is the one that leaves the WhatsApp message out."""
+    ra_settings.save(db, {"notify_on_publish": False})
+    review, relay = offered(db, on)
+    commands.handle(db, approve_command(review), secret=SECRET)
+    _finish(db, review, {"instagram": ("published", "https://www.instagram.com/reel/A/")})
+    service.settle_publishing(db, ra_settings.load(db))
+    service.flush_outbox(db, on, relay)
+    result = relay.notified[-1]
+    assert result["kind"] == "result" and result["approval_id"] == review["approval_id"]
+    assert result["results"]["clips"][0]["posts"][0]["url"] == "https://www.instagram.com/reel/A/"
+
+
+def test_a_defer_or_cancel_asked_of_muse_is_logged_as_muses(db, on):
+    review, _ = offered(db, on)
+    base = {"approval_id": review["approval_id"], "review_ref": review["id"]}
+    # The via is inside what the relay signed: added afterwards, the command is not the relay's.
+    forged = {**sign_command({"id": "cmd_" + "c" * 24, "kind": "defer", **base}), "via": "muse"}
+    assert commands.handle(db, forged, secret=SECRET).outcome == "rejected"
+    out = commands.handle(db, sign_command({"id": "cmd_" + "8" * 24, "kind": "defer", "via": "muse",
+                                            "remind_at": "2030-01-01T10:00:00Z", **base}), secret=SECRET)
+    assert out.outcome == "accepted"
+    commands.handle(db, sign_command({"id": "cmd_" + "9" * 24, "kind": "cancel", "via": "muse", **base}), secret=SECRET)
+    assert store.get_review(db, review["id"])["state"] == states.CANCELLED
+    actors = {row["action"]: row["actor"] for row in store.audit_log(db, review["id"])}
+    assert actors["defer_accepted"] == actors["deferred"] == "muse"
+    assert actors["cancel_accepted"] == actors["cancelled"] == "muse"
+
+
+def test_an_approval_that_says_it_came_from_muse_is_refused(db, on):
+    review, _ = offered(db, on)
+    out = commands.handle(db, approve_command(review, via="muse"), secret=SECRET)
+    assert out.outcome == "rejected" and "approval page with your PIN" in out.reason
+    assert commands.jobs_for_review(db, review["id"]) == []
+    assert store.get_review(db, review["id"])["state"] == states.NOTIFICATION_SENT
+
+
+def test_the_muse_key_is_handed_over_once_and_never_kept(db, muse_only):
+    relay = FakeRelay()
+    key = service.make_muse_key(db, relay)
+    assert key.startswith("ckm_") and key == relay.keys[0]
+    saved = db.get_flag(ra_settings.SETTINGS_KEY, "")
+    assert key not in saved and json.loads(saved)["muse"]["enabled"] is True
+    assert key not in json.dumps(ra_settings.public_view(db, muse_only))
+    service.revoke_muse_key(db, relay)
+    config = ra_settings.load(db)
+    assert config["muse"]["enabled"] is False
+    assert config["remote_approvals"] is False  # nothing is left to reach the creator
+
+
+def test_an_offer_kept_for_muse_is_not_counted_as_a_whatsapp_message(db):
+    usage.record_whatsapp(db, "muse")
+    usage.record_whatsapp(db, "interactive")
+    assert usage.load(db)["whatsapp"] == {"templates": 0, "free_form": 1, "usd": 0.0}

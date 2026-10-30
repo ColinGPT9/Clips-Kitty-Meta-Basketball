@@ -20,6 +20,7 @@ from test_remote_approval_e2e import ENROLL_KEY, Phone, _node_ok, relay_url  # n
 from core.state import StateDB  # noqa: E402
 from remote_approval import commands, notifier, service, states, store  # noqa: E402
 from remote_approval import settings as ra_settings  # noqa: E402
+from remote_approval.relay import RelayError  # noqa: E402
 from server import remote_approval_api  # noqa: E402
 
 SESSION = "test-session-secret-0123456789"
@@ -63,6 +64,8 @@ CHANGING = [
     ("POST", "/remote-approval/reviews/1/retry", None),
     ("POST", "/remote-approval/reviews/1/ask-again", None),
     ("POST", "/remote-approval/reviews/1/resend", None),
+    ("POST", "/remote-approval/muse/token", None),
+    ("POST", "/remote-approval/muse/revoke", None),
 ]
 
 
@@ -207,6 +210,73 @@ def test_a_retry_says_so_when_what_failed_went_up_from_somewhere_else(client):
     assert r.status_code == 409
     assert r.json()["detail"] == ("What failed is already posted, on its way or uploading now, so there is "
                                   "nothing to retry.")
+
+
+def _registered(client, monkeypatch):
+    """This PC registered with a fake relay, nothing else set up."""
+    from core import secrets
+
+    secrets.save(client.dir, ra_settings.DEVICE_SECRET, {"device_id": "dev_0123456789abcdef",
+                                                         "device_secret": DEVICE_SECRET})
+    relay = FakeRelay()
+    monkeypatch.setattr(service, "client", lambda db, data_dir: relay)
+    d = client.db()
+    ra_settings.save(d, {"relay_url": "https://relay.test"})
+    d.close()
+    return relay
+
+
+def test_a_muse_key_is_shown_once_and_kept_nowhere_on_this_pc(client, monkeypatch, events, capsys):
+    relay = _registered(client, monkeypatch)
+    r = client.post("/remote-approval/muse/token", headers=HEADERS)
+    assert r.status_code == 200
+    key = r.json()["key"]
+    assert key == relay.keys[0] and r.json()["settings"]["muse"]["enabled"] is True
+    assert any(c[0] == "preferences" and c[1]["whatsapp_enabled"] is False for c in relay.calls)
+    # Not in any answer after this one, the database, a file, an event or the log.
+    for path in ("/remote-approval/status", "/remote-approval/reviews", "/remote-approval/audit"):
+        assert key not in client.get(path).text, path
+    for f in client.dir.rglob("*"):
+        if f.is_file():
+            assert key.encode() not in f.read_bytes(), f.name
+    assert key not in json.dumps(events)
+    assert key not in capsys.readouterr().out
+
+    status = client.patch("/remote-approval/settings", json={"remote_approvals": True}, headers=HEADERS)
+    assert status.status_code == 409 and "PIN" in status.json()["detail"]  # Muse stands in for WhatsApp, not the PIN
+    d = client.db()
+    ra_settings.save(d, {"pin_set": True}, internal=True)
+    d.close()
+    status = client.patch("/remote-approval/settings", json={"remote_approvals": True}, headers=HEADERS)
+    assert status.status_code == 200 and status.json()["settings"]["remote_approvals"] is True
+
+    r = client.post("/remote-approval/muse/revoke", headers=HEADERS)
+    assert r.status_code == 200
+    assert r.json()["settings"]["muse"]["enabled"] is False
+    assert r.json()["settings"]["remote_approvals"] is False  # no WhatsApp either: nothing reaches the phone
+
+
+def test_revoking_says_whether_the_key_stopped_working_not_whether_the_preferences_followed(client, monkeypatch):
+    relay = _registered(client, monkeypatch)
+    assert client.post("/remote-approval/muse/token", headers=HEADERS).status_code == 200
+    # The relay can't be reached: the key still works, and Settings says so.
+    relay.fail["muse_revoke"] = RelayError("network", "Couldn't reach your relay.", retryable=True)
+    r = client.post("/remote-approval/muse/revoke", headers=HEADERS)
+    assert r.status_code == 502 and r.json()["detail"] == "Couldn't reach your relay."
+    assert client.get("/remote-approval/status").json()["settings"]["muse"]["enabled"] is True
+    # The key stopped working but the preferences didn't follow: that is no failure to report.
+    relay.fail["preferences"] = RelayError("network", "Couldn't reach your relay.", retryable=True)
+    r = client.post("/remote-approval/muse/revoke", headers=HEADERS)
+    assert r.status_code == 200
+    assert relay.muse["enabled"] is False and r.json()["settings"]["muse"]["enabled"] is False
+
+
+def test_a_relay_from_before_muse_says_to_deploy_it_again(client, monkeypatch):
+    relay = _registered(client, monkeypatch)
+    relay.fail["muse_token"] = RelayError("not_found", "Unknown relay route.", status=404)
+    r = client.post("/remote-approval/muse/token", headers=HEADERS)
+    assert r.status_code == 409
+    assert r.json()["detail"] == "Your relay is older than this version of Clips Kitty. Deploy it again to connect Muse."
 
 
 def store_approval(client, review_id):

@@ -4,8 +4,8 @@
 --
 -- Nothing here is a plaintext credential: device secrets, link tokens kept
 -- for reminders, and Meta access tokens are AES-GCM encrypted with the
--- TOKEN_KEY secret; link tokens and pairing codes are otherwise stored only
--- as SHA-256 hashes; the PIN only as a PBKDF2 hash.
+-- TOKEN_KEY secret; link tokens, pairing codes and Muse keys are otherwise
+-- stored only as SHA-256 hashes; the PIN only as a PBKDF2 hash.
 
 -- A Clips Kitty PC, registered once with the relay owner's ENROLL_KEY.
 CREATE TABLE IF NOT EXISTS devices (
@@ -152,6 +152,32 @@ CREATE TABLE IF NOT EXISTS graph_refs (
   uploaded   INTEGER NOT NULL DEFAULT 0,
   at         INTEGER NOT NULL
 );
+
+-- Keys for the creator's Muse agent (a custom connector in Muse chat), at
+-- most one working per PC. Only the SHA-256 of a key is kept: the key is
+-- shown once in Clips Kitty Settings and lives in Muse's credential store.
+-- A key reads offers and posts, hands out approval links, defers and
+-- cancels; it never approves or publishes (lib/muse.js). window_start and
+-- window_count are its per-minute rate limit.
+CREATE TABLE IF NOT EXISTS connector_tokens (
+  token_hash   TEXT PRIMARY KEY,
+  device_id    TEXT NOT NULL,
+  created_at   INTEGER NOT NULL,
+  last_used    INTEGER NOT NULL DEFAULT 0,
+  revoked_at   INTEGER NOT NULL DEFAULT 0,
+  window_start INTEGER NOT NULL DEFAULT 0,
+  window_count INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_connector_tokens_device ON connector_tokens(device_id, revoked_at);
+
+-- Each time five wrong PINs locked the approval page. Three within a day
+-- block approving from the phone until a new PIN is set on the PC, which
+-- clears them.
+CREATE TABLE IF NOT EXISTS pin_lockouts (
+  device_id TEXT NOT NULL,
+  at        INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pin_lockouts_device ON pin_lockouts(device_id, at);
 
 -- Template statuses, as Meta last reported them.
 CREATE TABLE IF NOT EXISTS templates (

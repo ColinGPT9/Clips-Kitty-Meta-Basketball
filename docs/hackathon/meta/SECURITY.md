@@ -34,12 +34,25 @@ What protects the creator's accounts and PC, and what each piece defends against
 | Threat | Protection |
 |---|---|
 | Someone else gets the link | Link token is 32 random bytes, stored only as its SHA-256; expires with the offer (1–72 h, 24 by default); approving also needs the PIN |
-| PIN guessing | PIN is 4–8 digits, not a repeated digit or a run; stored as PBKDF2-SHA256 (100,000 rounds, salted); 5 wrong tries lock approvals for 15 minutes |
+| PIN guessing | PIN is 4–8 digits, not a repeated digit or a run; stored as PBKDF2-SHA256 (100,000 rounds, salted); 5 wrong tries lock approvals for 15 minutes, and each try is counted before its PIN is checked, so tries sent all at once get no more; 3 lockouts within a day block approving from the phone until a new PIN is set on the PC |
 | Cross-site form posts | CSRF token bound to the approval and link (HMAC with `TOKEN_KEY`) and an `Origin` check |
 | Tampered form | Clips must be in the offer, platforms must be connected; anything else is refused and nothing is approved |
 | Script injection | Server-rendered HTML with everything escaped, no JavaScript, `Content-Security-Policy: default-src 'none'`, `frame-ancestors 'none'`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store` |
 | A generic "yes" in WhatsApp | Never approves; replies with where to approve |
 | Quick-reply buttons | Can only defer or cancel, and only the offer they were sent with, from the paired number |
+
+## The Muse connector
+
+The creator's Muse agent reads offers on the relay with a key made in
+Settings ([MUSE_CONNECTOR.md](MUSE_CONNECTOR.md)).
+
+| Threat | Protection |
+|---|---|
+| Someone else gets the Muse key | 32 random bytes, stored only as its SHA-256; accepted only in the `Authorization` header; one per PC, replaced or revoked at once from Settings and on disconnect. It reads offers and hands out their links; approving still needs the PIN |
+| Muse, or a prompt it read, tries to publish | No tool approves, publishes, takes a PIN or changes a setting. A reminder or cancel reaches the PC signed and marked `via: "muse"`, and the PC refuses any approval marked so |
+| A Muse key on the PC's routes | Refused on `/v1/`; the PC's signature is refused on `/mcp` and `/muse/v1/` |
+| A web page calling the connector | A request carrying another site's `Origin` is refused |
+| Flooding | About 60 calls a minute per key, then `429` |
 
 ## PC ↔ relay
 
@@ -62,7 +75,7 @@ What protects the creator's accounts and PC, and what each piece defends against
   text stays on the relay. Exceptions are redacted before printing.
 - The relay logs error codes only, never tokens, numbers or message bodies.
 - Every state change is in an audit log on the PC (`remote_audit`) and on
-  the relay (`audit`), with the actor (desktop, relay, phone, publisher).
+  the relay (`audit`), with the actor (desktop, relay, phone, muse, publisher).
 
 ## Settings routes on the PC
 
@@ -70,8 +83,10 @@ Every `/remote-approval` route that changes something requires the desktop
 app's session secret (`X-Clips-Kitty-Session`), the same one the plugin and
 Discord routes use, so a web page or stray script can't pair a number or
 switch approvals on. Reads return no secret and no phone number. Remote
-approval is off by default and can only be switched on after a number is
-paired and confirmed and a PIN is set.
+approval is off by default and can only be switched on once a PIN is set and
+a number is paired and confirmed, or a Muse agent is connected. A new Muse
+key passes through to Settings once and is not stored, logged or queued on
+the PC.
 
 ## Reporting a problem
 
