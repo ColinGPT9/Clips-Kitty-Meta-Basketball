@@ -99,6 +99,12 @@ export default function App(): JSX.Element {
           if (s.transcription.backend !== 'local') {
             parts.push(`${t('transcription')}: ${label(s.transcription.backend)}`)
           }
+          // The assistant runs on Muse Spark whenever a Meta key is saved,
+          // even while everything else runs here (server/agent.py,
+          // muse_backend). With Meta picking the clips, the AI part says so.
+          if (s.active.provider !== 'meta' && s.providers.some((p) => p.id === 'meta' && p.has_key)) {
+            parts.push(`${t('assistant')}: Muse Spark`)
+          }
           setCloudAI(parts.join(', '))
         })
         .catch(() => setCloudAI(''))

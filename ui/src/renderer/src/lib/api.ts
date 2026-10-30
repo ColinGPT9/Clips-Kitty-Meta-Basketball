@@ -287,7 +287,10 @@ export const api = {
     }),
   /** Whether the assistant can run, and which model it would use. The app's
    *  default scoring model cannot call tools, so this is a real question.
-   *  `install` is the Gemma 4 build to offer when no installed model can. */
+   *  With a Meta Model API key saved it runs on Muse Spark (`model` says so).
+   *  `install` is the Gemma 4 build to offer when no installed model can;
+   *  this edition sends `add_key` instead: the provider whose key would make
+   *  it work ('meta'), for the box to open that setup. */
   agentStatus: () =>
     request<{
       ready: boolean
@@ -295,6 +298,7 @@ export const api = {
       configured: string
       reason: string
       install?: { model: string; size_gb: number } | null
+      add_key?: string | null
     }>('/agent/status'),
   /** One exchange with the assistant. `steps` is what it actually did, `plan`
    *  is a proposed batch of uploads that NOTHING has acted on yet. */
