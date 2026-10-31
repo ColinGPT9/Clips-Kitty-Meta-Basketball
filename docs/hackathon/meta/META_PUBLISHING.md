@@ -1,17 +1,17 @@
 # Publishing to Instagram, Facebook and Threads
 
 Approved clips are published through Meta's official APIs only, by the
-creator's own relay, with the creator's own Meta app. WoopSocial and
-Upload-Post remain available in Clips Kitty as alternatives; this path does
-not use them.
+creator's own relay, with the creator's own Meta app. The third-party
+posting services the original app supports remain available in Clips Kitty
+as alternatives; this path does not use them.
 
 ## What gets posted
 
-| Platform | How | API steps (Graph API v26.0) |
+| Platform | How | API steps (Graph API v26.0; Threads API v1.0 at graph.threads.com) |
 |---|---|---|
 | Instagram Reels | The rendered MP4, uploaded with a resumable upload | `POST /{ig-user-id}/media` (`media_type=REELS`, `upload_type=resumable`, caption) → bytes to `rupload.facebook.com` → poll `GET /{container}?fields=status_code` until `FINISHED` → `POST /{ig-user-id}/media_publish` → `GET /{media-id}?fields=permalink` |
 | Facebook Page Reels | The same file, to the Page | `POST /{page-id}/video_reels` (`upload_phase=start`) → bytes to `rupload.facebook.com` → `upload_phase=finish`, `video_state=PUBLISHED`, title and description → poll `GET /{video-id}?fields=status,permalink_url` until published |
-| Threads | A text post linking to the Reel just confirmed | `POST /{threads-user-id}/threads` (`media_type=TEXT`, text, `link_attachment`) → poll status → `POST /threads_publish` → `GET /{id}?fields=permalink` |
+| Threads | A text post linking to the Reel just confirmed | `POST /{threads-user-id}/threads` (`media_type=TEXT`, text, `link_attachment`) → poll status → `POST /{threads-user-id}/threads_publish` → `GET /{id}?fields=permalink` |
 
 Threads cannot take a video from a file (only from a public URL), and the
 rendered clip lives on the creator's PC, so the Threads post links to the
@@ -63,8 +63,10 @@ than one Page, the relay asks which one.
 Without App Review, the app is in Standard Access: these permissions work
 **only for people who have a role on the app** (admin, developer, tester).
 For a creator publishing to their own accounts with their own app, and for
-the hackathon demo, that is enough: add yourself (and the Instagram and
-Threads accounts' owners) as app roles.
+the hackathon demo, that should be enough: add yourself (and the Instagram and
+Threads accounts' owners) as app roles. None of this page has been tried
+against live Meta yet: every test fakes the Graph API (FakeMeta in
+meta-relay/test/harness.mjs).
 
 To publish for accounts whose owners have no role on the app, Meta requires
 **Advanced Access** through App Review for `instagram_content_publish`,
@@ -76,7 +78,7 @@ claim to have it.
 
 - **Instagram**: 50 API-published posts per account per rolling 24 hours
   (`content_publishing_limit` reports the current quota); hitting it is
-  reported as "daily publishing limit reached".
+  reported as "Instagram's daily publishing limit for this account is reached. It resets within 24 hours."
 - **Facebook Page Reels**: 30 API-published Reels per Page per rolling 24 hours.
 - **Threads**: 250 API-published posts per profile per rolling 24 hours.
 - **Upload size**: every byte passes through the relay in one request, and
@@ -92,7 +94,8 @@ claim to have it.
 
 Meta's error codes become messages a creator can act on
 (`publish/meta_graph.py classify`); Meta's own error text stays on the
-relay, where it might contain an id. For example: code 190 → "Your Instagram
+relay, where it might contain an id; the one exception is an Instagram
+container's status line, shown after "Instagram could not process this video". For example: code 190 → "Your Instagram
 connection has expired. Reconnect it…"; 10 or 200–299 → permission missing;
 4/17/32/613 → "asked us to slow down"; subcode 2207042 → daily limit;
 2207026 → video format; 368 → account restricted.

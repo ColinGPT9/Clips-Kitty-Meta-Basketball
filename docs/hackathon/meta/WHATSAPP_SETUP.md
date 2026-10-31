@@ -1,8 +1,9 @@
 # Setting up WhatsApp notifications
 
-About 30 minutes, once. You need: a Meta developer account, a Meta Business
-portfolio, a phone number for the business (Meta's free test number works
-for the demo), a Cloudflare account (free), and Node 22.5+ on the PC you
+These steps have not been run against live Meta yet: every test fakes WhatsApp
+and the Graph API (meta-relay/test/harness.mjs). Allow about 30 minutes, once.
+You need: a Meta developer account, a Meta Business portfolio, a phone number
+for the business (Meta's free test number is meant for trials like the demo), a Cloudflare account (free), and Node 22.5+ on the PC you
 deploy from. Nothing here goes into the desktop app except the relay's
 address and a one-time enrolment key.
 
@@ -76,7 +77,7 @@ In Clips Kitty, **Settings → Notifications & Remote Approval**:
 1. **Your relay**: paste the relay address and the enrolment key, then
    *Connect this PC*. The PC makes its own device secret (stored with
    Windows DPAPI) and registers it; the enrolment key is used once and not kept.
-2. **Your WhatsApp number**: *Pair my WhatsApp number* shows a code like
+2. **WhatsApp (optional)**, the card's third section (the second, Your Muse agent, is only for Muse): *Pair my WhatsApp number* shows a code like
    `LINK K7QM2X`. Send it from your phone to the business number (or tap
    *Open WhatsApp*). The card then asks whether the number ending in, say,
    **4567** is yours; confirm it. A code alone never pairs a number.
@@ -95,9 +96,12 @@ and switch on **Let me approve publishing from my phone**.
 ## Turning it off
 
 - From the phone: send `STOP` (and `START` to resume).
-- From the app: switch off *Send me WhatsApp messages*, or **Disconnect**,
-  which makes the relay forget this PC, its number, PIN and accounts, and
-  cancels open offers.
+- From the app: switch off *Send me WhatsApp messages*, or **Disconnect**
+  (in 1. Your relay), which unpairs the number on the relay, cancels open
+  offers, stops the Muse key, and makes this PC forget its device secret. The
+  relay keeps this PC's old record, its PIN hash and the connected accounts'
+  sealed tokens; to remove those tokens, press **Disconnect** next to each
+  account in 4. Approval PIN and accounts first.
 
 ## Costs
 

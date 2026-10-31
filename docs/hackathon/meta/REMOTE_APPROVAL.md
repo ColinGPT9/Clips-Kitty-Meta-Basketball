@@ -1,7 +1,9 @@
 # Remote approval
 
 How a finished video becomes posts the creator approved from their phone,
-and every rule along the way.
+and every rule along the way. All of it runs in the tests with Meta's servers
+faked (meta-relay/test/harness.mjs); none of it has been tried against live
+WhatsApp, Graph API or Muse yet.
 
 ![The approval page](img/2_filled.png)
 
@@ -17,10 +19,11 @@ and every rule along the way.
    fingerprint over them, and counts highlights by category from the
    pipeline's own events. State:
    `READY_FOR_REVIEW` → `NOTIFICATION_PENDING`. A failed job queues the plain
-   failure message instead, with no error text.
+   failure message instead, with no error text, when WhatsApp is on (with a
+   Muse agent alone, nothing is queued).
 2. **The message goes out.** The publish worker's loop sends the outbox to
    the relay. The relay creates an approval (`apr_…`), a 32-byte link token
-   (only its hash is stored), keeps the thumbnails, and sends the
+   (found by its hash, and kept sealed with `TOKEN_KEY` so a reminder, the results message and the Muse agent can give the same link), keeps the thumbnails, and sends the
    `ck_highlights_ready` template: *"Clips Kitty finished your video
    {{title}}. Ready to review: {{5 clips: 2 dunks, 1 three, 1 block and 1
    steal}}. Choose where to publish them before the link expires."* with
@@ -31,10 +34,10 @@ and every rule along the way.
    sends nothing; the creator's Muse agent lists it and hands over the same
    link ([MUSE_CONNECTOR.md](MUSE_CONNECTOR.md)).
 3. **The phone decides.** The page lists the offered clips (thumbnail, play,
-   length, and what will be posted), only the platforms that are connected
+   length, and what will be posted), every platform, with any not connected greyed out and unticked
    (preferred ones pre-ticked), a confirm box, and the PIN. Approve sends a
    signed `approve` command naming exactly the clips and platforms ticked.
-   Remind me later → `DEFERRED` and a reminder after `remind_minutes`.
+   Remind me later → `DEFERRED`, and WhatsApp sends the link again after `remind_minutes` (with WhatsApp off, the Muse agent is told when to remind).
    Cancel → `CANCELLED`, nothing posted.
 4. **The PC checks it.** On its next pass the PC collects commands and
    checks each one itself (below). An accepted approval becomes one publish
@@ -65,8 +68,9 @@ and every rule along the way.
 - The fingerprint matches: the offer the phone saw is the offer on this PC.
   An old approval can never apply to new clips.
 - It was decided before the link expired, and is no more than 48 hours old
-  when the PC sees it. Otherwise the offer becomes `EXPIRED` and the creator
-  is asked again rather than having it posted late.
+  when the PC sees it. Otherwise the offer becomes `EXPIRED`, nothing is
+  posted late, and the page tells the creator to ask for a new offer (**Ask
+  again** in Settings).
 - At least one clip, every clip in the offer.
 - At least one platform, every platform known and connected.
 - Every chosen file is unchanged since the offer.
@@ -86,7 +90,7 @@ and every rule along the way.
   platform, and only within 24 hours of the approval.
 - On the PC, a platform already published for a clip is never posted again
   by a retry, and an upload cut off by a restart is reported as
-  "unconfirmed: check the account" and never retried automatically (the
+  unconfirmed ("Clips Kitty closed while this was uploading. Check the account before trying again.") and never retried automatically (the
   existing publish worker's rule).
 - A platform a clip is already posted on, or on its way to (a post another
   publisher has scheduled, an upload in progress), by any publisher, is
@@ -103,7 +107,8 @@ A job that a watch queued follows the watch's choice first
   videos too** unticked. The PC never publishes such a watch's clips by
   itself, and the engine refuses to publish them from the Watch page. The
   video's row says *"Ready to approve from your phone."* once the offer
-  exists, or what to switch on in Settings when nothing could reach the phone.
+  exists and approving from the phone is on; otherwise it says what to switch
+  on in Settings, or that nothing was sent.
 - A watch saved with the original app's automatic posting to Instagram,
   Facebook or Threads is never offered as well, so a clip can't go out twice.
 - Every other job, including a watched video clipped by hand, keeps the
@@ -128,7 +133,7 @@ and **Send again** (after WhatsApp could not deliver, with a fresh link).
 
 | Event | Template | Notes |
 |---|---|---|
-| Highlights ready | `ck_highlights_ready` | Title and counts from the job; optional Muse Spark line only when turned on |
+| Highlights ready | `ck_highlights_ready` | Title and counts from the job; the optional Muse Spark line goes on the approval page, never in the message |
 | Processing failed | `ck_processing_failed` | Exactly: "Clips Kitty could not finish processing your video. Open the app for details." No error text, no path |
 | Publishing finished | `ck_publish_update` | Counted from confirmed results only; links are on the status page |
 | Test | `ck_test_message` | From Settings |
