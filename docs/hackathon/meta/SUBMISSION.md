@@ -32,8 +32,8 @@ until someone at the desk posts them, and the manager is at the game.
 
 When the PC finishes a game, the creator gets a WhatsApp message with the
 real counts ("5 clips: 2 dunks, 1 three, 1 block and 1 steal"). One tap
-opens a page with a still from each rendered clip and Muse Spark's captions for each
-platform. They pick the clips and where they go, confirm, enter their PIN,
+opens a page with a still from each rendered clip and what each platform will get,
+written by Muse Spark when **Write captions with Muse Spark** is ticked. They pick the clips and where they go, confirm, enter their PIN,
 and the PC publishes the files it already rendered as Instagram Reels,
 Facebook Page Reels and a Threads post. WhatsApp then says what Meta's APIs
 confirmed, "3 of 3 posts published", and its View status button opens the confirmed links.
@@ -53,7 +53,9 @@ posted, and neither Muse Spark nor the Muse app was used. See
 The heavy work stays local and private: the video, the vision models (YOLO, OpenCV,
 scoreboard reading, and [E-BARD](https://github.com/GabrieleGiudic/E-BARD) tracking, used unmodified under CC BY 4.0) and rendering all run on the
 creator's PC, which never opens a port. A tiny relay the creator owns (one
-Cloudflare Worker) is the only thing Meta talks to.
+Cloudflare Worker) is the only thing that talks to WhatsApp, Instagram, Facebook
+and Threads. The PC reaches Meta only through it and, on the creator's own key,
+through Meta's Model API for Muse Spark and Muse Voice.
 
 ## How Meta's tools are used
 
@@ -64,7 +66,8 @@ Cloudflare Worker) is the only thing Meta talks to.
 | **Facebook Pages API (Video Reels)** | Page Reels: start, upload, finish, status, permalink |
 | **Threads API** | A post linking to the Reel, with Threads Login and token refresh |
 | **Facebook Login for Business** | Connecting the Page and its Instagram account; tokens kept on the relay only |
-| **Muse Spark** (Meta Model API) | One strict-JSON request per video writes every clip's title, Instagram caption, Facebook description, Threads post and hashtags, plus an optional summary line; cached; cost tracked from its usage block |
+| **Muse Spark** (picking the plays) | When chosen under Settings → AI → **Clip picking, titles and the assistant**, the app's existing Meta provider scores and ranks the moments the basketball pipeline proposes and writes the titles, each checked against the scoreboard and the commentary |
+| **Muse Spark** (Meta Model API) | With **Write captions with Muse Spark** ticked (off by default), one strict-JSON request per offer writes every clip's title, Instagram caption, Facebook description, Threads post and hashtags, plus an optional summary line; cached; cost tracked from its usage block |
 | **Muse Voice Transcribe** | An option on the existing transcription path for commentary; turn-level timings kept honest (no invented word times); Whisper as fallback |
 | **Muse** (Meta's personal agent app) | A custom connector on the creator's relay: a remote MCP server with six tools, plus the same tools as REST routes with an OpenAPI description. Muse lists the highlights waiting, hands over the approval link, says what got posted, and reminds or cancels; no tool approves or posts. Works without WhatsApp. Built and tested against the real relay code; **not yet tried in the Muse app** ([MUSE_CONNECTOR.md](MUSE_CONNECTOR.md)) |
 | **Muse Spark** (the in-app assistant) | **Ask Clips Kitty**, the box at the bottom of the app, runs on Muse Spark with the app's own tools once a Meta Model API key is saved. Built and tested with Meta's API faked; one live request still to make |

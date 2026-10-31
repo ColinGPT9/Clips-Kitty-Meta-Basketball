@@ -710,7 +710,6 @@ def _anchors(path: Path) -> set[str]:
     return out
 
 
-@needs_app_readme
 def test_the_developer_pages_links_resolve():
     broken = []
     for page in sorted(DEV_DOCS.glob("*.md")):

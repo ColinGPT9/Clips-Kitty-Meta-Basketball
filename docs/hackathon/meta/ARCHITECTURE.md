@@ -8,7 +8,7 @@ flowchart TD
     G["Shared Google Drive folder<br/>the video team drops each quarter in"]
     subgraph PC["The office PC: Clips Kitty"]
         F["Folder watch<br/>takes each file once it stops changing"]
-        E["E-BARD (YOLOv8n)<br/>ball · hoop · players · referees"]
+        E["E-BARD (YOLOv8n)<br/>ball · hoop · players · referees, for the crop"]
         Y["YOLOv8 + OpenCV · RapidOCR · PANNs<br/>shots · cutaways · score bug · crowd"]
         B["Basketball pipeline<br/>plays from the score bug, the commentary and the crowd"]
         R["9:16 clips<br/>the crop follows the play"]
@@ -27,11 +27,10 @@ flowchart TD
     FB["Facebook Page Reels"]
     TH["Threads<br/>a post linking to the Reel"]
     G --> F
-    F --> E
     F --> Y
-    E --> B
     Y --> B
     B --> R
+    E --> R
     R --> O
     MV -.->|Meta Model API, your key| B
     MS -.->|Meta Model API, your key| B

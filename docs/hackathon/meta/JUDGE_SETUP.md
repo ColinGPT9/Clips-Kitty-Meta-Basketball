@@ -19,9 +19,9 @@ flow with the real relay and engine code and Meta's servers faked. See
 
 ```
 pip install pyyaml requests pytest fastapi httpx
-python -m pytest -q tests/test_remote_approval.py tests/test_remote_approval_e2e.py \
+python -m pytest tests/test_remote_approval.py tests/test_remote_approval_e2e.py \
     tests/test_remote_approval_api.py tests/test_meta_graph.py tests/test_muse.py \
-    tests/test_folder_feed.py tests/test_agent_muse.py
+    tests/test_folder_feed.py tests/test_agent_muse.py tests/test_ui_local_upload.py
 cd meta-relay && npm test
 ```
 

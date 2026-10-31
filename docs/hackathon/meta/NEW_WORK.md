@@ -89,8 +89,8 @@ Small, targeted edits to existing code (everything else is in new files):
   `_clipskitty_script_host.py`, `sdk/python/clipskitty_sdk/lint.py`: the new
   package compiled, bundled and listed as engine code; a CI job for the relay tests.
 - `docs/developers/api-reference.md`: regenerated (the new routes are internal).
-- `README.md`: the Meta hackathon edition's introduction at the top, and the
-  passages on the box at the bottom, which runs on Muse Spark with a Meta key.
+- `README.md`: replaced by a README for this edition only. The original's
+  README is in ColinGPT9/clips-studio, and links into it now point there.
 
 For the October 30 additions:
 
@@ -120,6 +120,14 @@ For the October 30 additions:
   also sends a local file's Sports choice and clip direction, which it
   dropped before (found in the Windows run).
 - `docs/API.md`: the folder platform, the phone mode and **Check now**.
+- `docs/developers/` (five pages): links into the original README now point at
+  ColinGPT9/clips-studio.
+- Six test files (`test_launch_drafts.py`, `test_plugin_docs.py`,
+  `test_plugin_sdk_install.py`, `test_plugin_sdk_package.py`,
+  `test_site_developers.py`, `test_ui_store_update.py`): their checks of the
+  original README skip here, where that README isn't.
+- Removed: `docs/hackathon/JUDGE_SETUP.md`, `SUBMISSION.md` and `TEST_LOG.md`,
+  older records from the original repository, where they stay.
 - `ARCHITECTURE.md`, `docs/SPORTS.md`, `docs/CONNECTED_ACCOUNTS.md`: the box
   at the bottom on Muse Spark, and phone approval for a new Twitch watch.
 - `tests/test_automation.py`, `tests/test_llm_adapters.py`: tests for the above.

@@ -16,7 +16,7 @@ Every version number in the platform, where it lives, and what it promises.
 
 Clips Kitty 2.1.0 is the first release that runs plugins, and it comes with SDK 1.3.0.
 
-Clips Kitty bundles the SDK from the commit it is built from, so each release brings the SDK of its commit: 2.1.0 brings SDK 1.3.0. For an SDK newer than the latest release, run Clips Kitty from source: [From source](../../README.md#from-source).
+Clips Kitty bundles the SDK from the commit it is built from, so each release brings the SDK of its commit: 2.1.0 brings SDK 1.3.0. For an SDK newer than the latest release, run Clips Kitty from source: [From source](https://github.com/ColinGPT9/clips-studio#from-source).
 
 ## The edit step and older Clips Kitty
 

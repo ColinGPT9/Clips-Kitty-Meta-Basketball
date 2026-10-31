@@ -141,6 +141,11 @@ Results after merging, at `4d7078d`, on the same Windows PC:
 | UI `npm run typecheck`, `ruff check .`, `git diff --check` | clean |
 | The Watch page's regression scripts (`ui/scripts/test-watch-detector.cjs`, `test-connected-accounts.cjs`) | pass |
 
+Re-run later on 30 October, after this edition got its own README: the first
+row's files gave **380 passed** and 1 skipped, a check that reads the original
+app's README, which is in ColinGPT9/clips-studio. The other rows are unchanged:
+none of their files reads the README.
+
 The one failure, `test_automation.py::test_the_preview_shows_the_slots_that_would_be_used`,
 is in the original app's posting schedule preview: its third slot comes out
 an hour early because the preview spans the 1 November 2026 clock change. It
