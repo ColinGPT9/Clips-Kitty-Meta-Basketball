@@ -15,8 +15,8 @@ hackathon edition. The creator deploys their own; it is single-tenant.
   results and can remind or cancel; it can't approve or publish. See
   [MUSE_CONNECTOR.md](../docs/hackathon/meta/MUSE_CONNECTOR.md).
 
-The PC only ever calls out to it with signed requests; it never calls the
-PC. See [docs/hackathon/meta/ARCHITECTURE.md](../docs/hackathon/meta/ARCHITECTURE.md)
+The PC only ever calls out to it: once with the enrolment key to register,
+then with signed requests. The relay never calls the PC. See [docs/hackathon/meta/ARCHITECTURE.md](../docs/hackathon/meta/ARCHITECTURE.md)
 and [SECURITY.md](../docs/hackathon/meta/SECURITY.md).
 
 ## Deploy

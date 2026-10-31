@@ -14,8 +14,8 @@ anywhere:
 
 **Muse can never post anything.** Publishing still happens only on the
 approval page (`/a/<link>`), where you tick the clips and the places to post
-and enter your own PIN. Muse can hand you that link; it can't open it for
-you, and it never sees, asks for or types the PIN.
+and enter your own PIN. Muse can hand you that link. No tool takes or shows
+the PIN, and the connector tells Muse never to ask for it or type it.
 
 Muse works with or without WhatsApp. With Muse connected and no WhatsApp
 number paired, offers are kept on the relay for Muse to find, and no message
@@ -104,9 +104,9 @@ The same tools over plain HTTPS (same key, same answers):
 
 | Route | Tool |
 |---|---|
-| `GET /muse/v1/offers?match=&since=&limit=&include_captions=` | `list_ready_highlights` |
+| `GET /muse/v1/offers`, optional query `match`, `since`, `limit`, `include_captions` (leave out any you don't set) | `list_ready_highlights` |
 | `GET /muse/v1/offers/{approval_id}/link` | `get_approval_link` |
-| `GET /muse/v1/posts?days=&limit=` | `list_recent_posts` |
+| `GET /muse/v1/posts`, optional query `days`, `limit` (leave out any you don't set) | `list_recent_posts` |
 | `POST /muse/v1/offers/{approval_id}/remind` `{"minutes": 60}` | `remind_me_later` |
 | `POST /muse/v1/offers/{approval_id}/cancel` `{"confirm": true}` | `cancel_offer` |
 | `GET /muse/v1/status` | `relay_status` |
