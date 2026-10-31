@@ -16,11 +16,17 @@ commit `6245e02332ba07e0c9b12d47a95ee81502f4122d`. What is new is listed in
 
 ## The problem
 
-A small basketball creator records a game, and Clips Kitty finds the
-highlights on their own PC overnight: dunks, threes, blocks, steals. Then
-the clips sit there until the creator is back at the desk to post them,
-and the moment passes. The big highlight accounts win by being
-first; a one-person channel can't watch a render bar.
+Sports highlights are huge on Instagram, and while a game is on, it's
+trending on social media and at the top of Google search. The big highlight
+accounts win by being first. Say you're the social media manager for an NBA
+team, running its Instagram, Facebook and Threads: the clips need to go up
+during the game or right after, while people are still talking about it.
+
+There's a lot of open-source basketball computer vision, but a search for
+this project found no open-source tool that turns an NBA broadcast into
+vertical clips that follow the ball. Clips Kitty does, and finds the dunks,
+threes, blocks and steals on the team's own PC. But then the clips wait there
+until someone at the desk posts them, and the manager is at the game.
 
 ## What it does
 
@@ -33,9 +39,9 @@ Facebook Page Reels and a Threads post. WhatsApp then says what Meta's APIs
 confirmed, "3 of 3 posts published", and its View status button opens the confirmed links.
 
 The person running a team's socials doesn't have to start anything either.
-Clips Kitty can watch the team's YouTube channel, its Twitch VODs or a shared
-folder (a Google Drive for desktop folder set to Mirror files, say), clip each new game by
-itself, and send the clips to the phone for approval. From anywhere, they
+Clips Kitty can watch the team's shared Google Drive folder (with Google
+Drive for desktop set to Mirror files), clip each quarter or game dropped in
+it by itself, and send the clips to the phone for approval. From anywhere, they
 can ask their **Muse agent** what's ready, get the approval link, and later
 ask what got posted. Muse never posts: the PIN page is the only way to approve.
 
@@ -78,8 +84,8 @@ Cloudflare Worker) is the only thing Meta talks to.
   retried without double-posting, and an upload cut off by a restart is
   "check the account", never assumed.
 - Automation to the phone: a watch set to **Ask me on my phone** turns a
-  new YouTube upload, a finished Twitch stream's VOD or a file dropped in a
-  watched folder into an approval offer. A folder file counts only once it
+  file dropped in a watched folder (a shared Google Drive folder, say) into
+  an approval offer. A folder file counts only once it
   has stopped changing and nothing is still writing it, gets the same id as
   a file added by hand (never clipped twice), and is only read.
 - A Muse connector speaking both MCP eras (the `initialize` handshake and
