@@ -42,9 +42,9 @@ python scripts/meta_demo.py        # needs Node 22.5+ and ffmpeg
 | Setting it up | [WHATSAPP_SETUP.md](docs/hackathon/meta/WHATSAPP_SETUP.md) · [META_PUBLISHING.md](docs/hackathon/meta/META_PUBLISHING.md) · [meta-relay/](meta-relay/README.md) |
 | Judges | [JUDGE_SETUP.md](docs/hackathon/meta/JUDGE_SETUP.md) · [DEMO_SCRIPT.md](docs/hackathon/meta/DEMO_SCRIPT.md) · [TEST_LOG.md](docs/hackathon/meta/TEST_LOG.md) · [SUBMISSION.md](docs/hackathon/meta/SUBMISSION.md) |
 
-Inspired by the Toronto Raptors and by highlight accounts like House of
-Highlights. **This project is not affiliated with, endorsed by, or
-sponsored by Meta, House of Highlights, the NBA, or the Toronto Raptors.**
+Inspired by the Toronto Raptors and by basketball highlight accounts.
+**This project is not affiliated with, endorsed by, or sponsored by Meta,
+the NBA, or the Toronto Raptors.**
 Licensed AGPL-3.0-or-later, like the original; its history and attribution
 are kept intact below.
 

@@ -102,7 +102,7 @@ The Muse connector: `POST /mcp` (MCP, plain JSON, no sessions), the same
 tools at `/muse/v1/...`, their OpenAPI description at `/muse/openapi.json`
 and a setup guide at `/muse`. Keys are made by the PC through the signed
 `/v1/muse/token` and `/v1/muse/revoke`, and kept in `connector_tokens` as
-SHA-256 only, with a one-minute call window each. A Muse key works only on
+SHA-256 only, each allowed 60 calls a minute. A Muse key works only on
 the connector's routes, and the PC's signature never does. Wrong PINs:
 five lock the page for 15 minutes, each try counted before it is checked;
 three of those lockouts within a day (`pin_lockouts`) block approving from
@@ -133,4 +133,5 @@ single creator.
 - **WhatsApp** delivers, or, with WhatsApp off, the relay keeps the offer for
   the creator's **Muse agent** to read through the connector. The ready
   message is deterministic (from the job's real metadata); the Muse Spark
-  summary line is added only when the creator turns it on.
+  summary line, when the creator turns it on, goes on the approval page,
+  never in the message.
