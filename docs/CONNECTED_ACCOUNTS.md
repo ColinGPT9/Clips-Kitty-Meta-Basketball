@@ -29,7 +29,8 @@ Discord authorization and bot installation are a separate integration effort.
    An account that shows **Reconnect required** has a **Reconnect** button,
    which asks for the same permissions it had. **Watch my channel** adds the
    channel with the Watch page's Add a channel choices (from Settings: the
-   Generate bar's settings, and clips wait for you before publishing). When
+   Generate bar's settings, and in the Meta hackathon edition publishing set
+   to **Ask me on my phone**, so its clips go to your phone for approval). When
    Twitch doesn't confirm a disconnect removed its authorization, the card says
    so, and the app can be removed under Connections in Twitch's settings.
 
@@ -216,7 +217,8 @@ Releasing the desktop consumer preserved the nomination collector, and stopping
 collection closed the listener. The channel was offline: live stream transitions,
 nomination-to-recording clock alignment, native clip creation, token refresh,
 revocation and social delivery remain unverified by that session. See the
-[test log](hackathon/TEST_LOG.md) for the source snapshot and evidence limits.
+[test log](https://github.com/ColinGPT9/clips-studio/blob/6245e02/docs/hackathon/TEST_LOG.md)
+in the original repository for the source snapshot and evidence limits.
 
 Official provider references:
 

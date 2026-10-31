@@ -23,7 +23,17 @@ Whisper never shows them because faster-whisper runs a voice detector
 sent: a part where nobody speaks isn't sent at all (and isn't paid for),
 and a word the model returns outside the speech it found is dropped.
 Nothing falls back to local Whisper; a failing provider fails the job, in
-plain words.
+plain words. The one exception is a provider whose spec asks for it
+(stt["fallback_local"]): Meta's Muse Voice Transcribe, added for the Meta
+hackathon edition, where transcriber.transcribe runs Whisper instead.
+
+Muse Voice is also the one provider here that times turns, not words
+(stt["word_timings"] False): Meta's docs say it returns no word timestamps.
+Its turns become segments with their own start and end and no words; none
+are made up here. What reads words already copes with a segment without
+them (as with transcripts cached before word timings existed): captions and
+commentary spread its words over the segment, so they are approximate, and
+a creator who needs word-exact captions keeps Whisper.
 """
 
 import base64
@@ -54,7 +64,7 @@ _SENTENCE_END = re.compile(r"[.!?…。！？]['\")\]]*$")
 
 
 def transcribe(video_path: Path, video_id: str, transcript_dir: Path, online: dict,
-               language: str | None = None) -> list[Segment]:
+               language: str | None = None, hotwords: str | None = None) -> list[Segment]:
     provider = str(online.get("backend") or "")
     spec = get(provider)
     if spec is None or not spec.stt:
@@ -64,23 +74,43 @@ def transcribe(video_path: Path, video_id: str, transcript_dir: Path, online: di
         raise LLMError("not_configured", f"No {spec.label} API key is saved. Add yours in Settings → AI.")
     model = str(online.get("model") or spec.stt["models"][0])
     length = float(spec.stt["chunk_seconds"])
+    turn_level = spec.stt.get("word_timings") is False
+    keywords = [k.strip() for k in re.split(r"[,\n]", hotwords or "") if k.strip()][:50]
 
     duration = _duration(video_path)
     starts = [i * length for i in range(max(1, int(-(-duration // length))))]
     print(f"  Transcribing online with {spec.label} ({model}), {len(starts)} part(s)...")
 
     words: list[dict] = []
+    turns: list[dict] = []
     detected = ""
     silent = made_up = 0
+    sent_seconds = 0.0
     with tempfile.TemporaryDirectory(prefix="ck-stt-") as tmp:
         for i, start in enumerate(starts):
             cancel.check_active()
             progress.emit(stage="transcribe", fraction=i / len(starts))
             clip_from = max(0.0, start - OVERLAP)
-            audio = _extract(video_path, Path(tmp) / f"part{i}.mp3", clip_from, length + 2 * OVERLAP)
+            if turn_level:
+                audio = _extract(video_path, Path(tmp) / f"part{i}.wav", clip_from, length + 2 * OVERLAP, wav=True)
+            else:
+                audio = _extract(video_path, Path(tmp) / f"part{i}.mp3", clip_from, length + 2 * OVERLAP)
             speech = _speech_in(audio)
             if speech == []:
                 silent += 1
+                continue
+            sent_seconds += max(0.0, min(length + 2 * OVERLAP, duration - clip_from))
+            end = start + length if i < len(starts) - 1 else float("inf")
+            if turn_level:
+                part_turns = _request_turns(spec, key, model, audio, language, keywords)
+                if speech is not None:
+                    kept = [t for t in part_turns if _spoken(t, speech)]
+                    made_up += len(part_turns) - len(kept)
+                    part_turns = kept
+                for t in part_turns:
+                    absolute = {**t, "start": round(t["start"] + clip_from, 2), "end": round(t["end"] + clip_from, 2)}
+                    if start <= absolute["start"] < end:
+                        turns.append(absolute)
                 continue
             part_words, part_language = _request(spec, key, model, audio, language)
             if speech is not None:
@@ -90,7 +120,6 @@ def transcribe(video_path: Path, video_id: str, transcript_dir: Path, online: di
             detected = detected or part_language
             # A word belongs to the part its start falls in; the overlap is
             # context for the model, so words at a boundary are not cut off.
-            end = start + length if i < len(starts) - 1 else float("inf")
             for w in part_words:
                 absolute = {**w, "start": round(w["start"] + clip_from, 2), "end": round(w["end"] + clip_from, 2)}
                 if start <= absolute["start"] < end:
@@ -99,11 +128,19 @@ def transcribe(video_path: Path, video_id: str, transcript_dir: Path, online: di
     if silent or made_up:
         print(f"      Nobody speaks in {silent} part(s), not sent; {made_up} word(s) outside speech dropped")
 
-    segments = group_words(words)
+    if turn_level:
+        segments = [Segment(start=t["start"], end=t["end"], text=t["text"], words=None)
+                    for t in sorted(turns, key=lambda x: x["start"])]
+    else:
+        segments = group_words(words)
     lang = (language or normalize_language(detected) or "en").lower()
     transcript_dir.mkdir(parents=True, exist_ok=True)
     payload = {"video_id": video_id, "language": lang, "source": f"{provider}/{model}",
                "segments": [vars(s) for s in segments]}
+    if turn_level:
+        payload["word_timings"] = False
+    payload["audio_seconds"] = round(sent_seconds, 1)
+    _record_usage(online, provider, sent_seconds)
     (transcript_dir / f"{video_id}.json").write_text(json.dumps(payload), encoding="utf-8")
     # The repetition guard runs in transcriber.transcribe(), on these the same
     # as on a local transcript; importing it here would make a cycle.
@@ -118,6 +155,17 @@ def check_model(spec, key: str, model: str) -> tuple[bool, str]:
     uses, so a yes here means a yes in a job. Only ever run because the user
     picked the model; it costs a tiny fraction of a cent on their key.
     """
+    if spec.stt.get("word_timings") is False:
+        try:
+            with tempfile.TemporaryDirectory(prefix="ck-stt-") as tmp:
+                turns = _request_turns(spec, key, model, _extract(PROBE, Path(tmp) / "probe.wav", 0, 30, wav=True),
+                                       "en", [])
+        except LLMError as e:
+            return False, e.message
+        if not turns:
+            return False, f"{model} returned nothing for the test clip. Choose another voice model."
+        return True, (f"{model} works: it returned timed turns for the test clip. It times turns, not "
+                      "words, so word-by-word captions are approximate.")
     try:
         words, _language = _request(spec, key, model, PROBE, "en")
     except LLMError as e:
@@ -186,6 +234,77 @@ def _request(spec, key: str, model: str, audio: Path, language: str | None) -> t
                  for w in answer.get("words") or [] if isinstance(w, dict) and str(w.get("text") or "").strip()]
         return words, str(answer.get("language") or "")
     raise LLMError("not_configured", f"{spec.label} transcription is not set up in this version.")
+
+
+def _request_turns(spec, key: str, model: str, audio: Path, language: str | None,
+                   keywords: list[str]) -> list[dict]:
+    """Muse Voice Transcribe: one WAV part, its turns as {"start", "end",
+    "text"} in seconds from the part's start. ENDPOINTING mode, the one that
+    splits the audio into timed turns (PUSH_TO_TALK returns none). The names
+    the job knows (keywords) help it spell players and teams."""
+    request: dict = {"model": model, "audioEncoding": "WAV", "mode": "ENDPOINTING"}
+    name = _language_name(language)
+    if name:
+        request["languageBias"] = [name]
+    if keywords:
+        request["keywords"] = keywords
+    answer = send(spec, key, "POST", "/asr/transcribe", timeout=STT_TIMEOUT, files={
+        "request": (None, json.dumps(request), "application/json"),
+        "audio": (audio.name, audio.read_bytes(), "audio/wav"),
+    })
+    turns = []
+    for t in answer.get("turns") or []:
+        if not isinstance(t, dict):
+            continue
+        text = re.sub(r"\s+", " ", str(t.get("transcript") or "")).strip()
+        try:
+            start, end = float(t["startMs"]) / 1000, float(t["endMs"]) / 1000
+        except (KeyError, TypeError, ValueError):
+            continue
+        if text and end > start:
+            turns.append({"start": start, "end": end, "text": text})
+    if not turns and str(answer.get("transcript") or "").strip():
+        # Text with no turn to place it in: refused rather than given a made-up time.
+        raise LLMError("bad_response", "Muse Voice returned text without timings for part of the audio.")
+    return turns
+
+
+def _language_name(code: str | None) -> str:
+    """"es" -> "Spanish", for Muse Voice's languageBias (it takes names)."""
+    if not code:
+        return ""
+    from multilingual.languages import LANGUAGES
+
+    entry = LANGUAGES.get(code.lower())
+    return entry[0] if entry else ""
+
+
+def falls_back(online: dict | None) -> bool:
+    """Whether a failure of this provider should hand the job to local
+    Whisper instead of failing it (stt["fallback_local"])."""
+    spec = get(str((online or {}).get("backend") or ""))
+    return bool(spec is not None and spec.stt.get("fallback_local"))
+
+
+def _record_usage(online: dict, provider: str, seconds: float) -> None:
+    """Audio seconds sent to Muse Voice, for the usage panel (estimates).
+    Never fails a transcription."""
+    if provider != "meta" or seconds <= 0:
+        return
+    try:
+        from core.state import StateDB
+        from remote_approval import usage
+
+        path = Path(online.get("data_dir") or "data") / "state.db"
+        if not path.exists():
+            return
+        db = StateDB(path)
+        try:
+            usage.record_voice(db, seconds)
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"      (couldn't record Muse Voice usage: {e})")
 
 
 def _whisper_words(answer: dict) -> list[dict]:
@@ -279,12 +398,15 @@ def _duration(video_path: Path) -> float:
         return 1.0
 
 
-def _extract(video_path: Path, out: Path, start: float, seconds: float) -> Path:
+def _extract(video_path: Path, out: Path, start: float, seconds: float, *, wav: bool = False) -> Path:
     """Mono 16 kHz speech-quality MP3: about 2.4 MB per ten minutes, inside
-    every provider's upload limit, and a format they all accept."""
+    every provider's upload limit, and a format they all accept. Or, for Muse
+    Voice (wav), the 16-bit PCM WAV it requires: 9 minutes is about 17 MB,
+    inside its 32 MB and 10-minute limits."""
+    codec = ["-c:a", "pcm_s16le", "-map_metadata", "-1"] if wav else ["-c:a", "libmp3lame", "-b:a", "32k"]
     result = subprocess.run(
         [ffmpeg(), "-v", "error", "-y", "-ss", f"{start:.2f}", "-t", f"{seconds:.2f}",
-         "-i", str(video_path), "-vn", "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-b:a", "32k", str(out)],
+         "-i", str(video_path), "-vn", "-ac", "1", "-ar", "16000", *codec, str(out)],
         capture_output=True, text=True,
     )
     if result.returncode != 0 or not out.exists():

@@ -1131,6 +1131,15 @@ How each channel is read:
 - **Twitch:** past broadcasts, through yt-dlp.
 - **Kick:** Kick's own channel videos endpoint. It is unofficial; if it stops
   answering, the watch's `last_error` says so.
+- **Folder** (`"platform": "folder"`, `channel` the folder's full path): a
+  folder on this PC, such as a Google Drive for desktop, Dropbox or OneDrive
+  one, looked at every 30 seconds. Only video files directly in it count, once
+  their size and time have stayed the same for a minute and no program still
+  has them open to write. A file that is only online waits until the sync app
+  has downloaded it. A network path, or a folder inside Clips Kitty's own data
+  folder, is refused with 400. A file is copied into the app and queued as
+  `local:<id>`, the id `POST /videos/local` gives the same file, so it is never
+  clipped twice; the file itself is only read.
 
 ### `GET /automation` · `PATCH /automation`
 
@@ -1202,7 +1211,7 @@ PATCH takes any of the following, and changes only what it is sent:
 | `enabled` | Whether this watch is looked at. |
 | `preset` | An `id` from `GET /automation` (the same presets as integrations). |
 | `options` | The same per-video options as `PATCH /jobs/{id}`, validated the same way. |
-| `publish.mode` | `off`: leave the clips alone. `ask`: stop at "ready to publish" (the default). `auto`: publish as soon as the clips exist, and retry on failure (see below). |
+| `publish.mode` | `off`: leave the clips alone. `ask`: stop at "ready to publish" (the default). `auto`: publish as soon as the clips exist, and retry on failure (see below). `phone`: offer them for approval on the phone (remote approval) when they are made, whatever kind of video it is; nothing is published from here, and `POST /automation/items/{id}/publish` answers 409. An `auto` watch posting to Instagram, Facebook or Threads is never offered on the phone as well. |
 | `publish.platforms` | Lower-case names of connected WoopSocial platforms. With none chosen, an automatic watch asks instead. |
 | `publish.max_posts` | How many of each video's clips to post, best-scoring first. `0` (the default) posts every clip; the rest stay in the library. |
 | `publish.spread` | `true` (the default) spaces posts on the daily budget below. `false` posts each clip the moment it is made, like the Publish dialog with "Space them out" off; pair it with a small `max_posts`. |
@@ -1255,7 +1264,9 @@ Returns 400 with the reason when the settings cannot work, such as 10 posts
 
 ### `POST /automation/watches/{id}/check`
 
-Look at the channel now instead of waiting for the next interval.
+Look at the channel now instead of waiting for the next interval, and look
+again at its videos still waiting to be ready, so a stream that just ended is
+queued now. One still live keeps waiting.
 
 ### `GET /automation/items?watch_id=`
 

@@ -717,7 +717,11 @@ const EXTERNAL_ALLOWED = [
   /^https:\/\/(www\.)?linkedin\.com\//,
   /^https:\/\/([a-z]{2}\.|www\.)?pinterest\.[a-z.]{2,6}\//,
   /^https:\/\/(www\.)?bsky\.app\//,
-  /^https:\/\/(www\.)?reddit\.com\//
+  /^https:\/\/(www\.)?reddit\.com\//,
+  // Settings → Notifications & Remote Approval: pairing a WhatsApp number
+  // opens WhatsApp with the one-time code typed (wa.me, only in that shape).
+  // The Meta sign-ins it opens are on facebook.com and threads.com, above.
+  /^https:\/\/wa\.me\/\d{6,15}\?text=LINK%20[A-Z0-9]{6}$/
 ]
 
 ipcMain.handle('open-external', (_event, url: unknown) => {
@@ -809,6 +813,17 @@ ipcMain.handle('open-catalog-link', (event, url: unknown, ours: unknown) =>
 ipcMain.handle('pick-plugin-folder', async () => {
   const result = await dialog.showOpenDialog({
     title: 'Choose the pipeline folder (the one with clipskitty.yaml)',
+    properties: ['openDirectory']
+  })
+  return result.canceled ? null : result.filePaths[0]
+})
+
+// Folder picker for watching a folder: a Google Drive for desktop, Dropbox or
+// OneDrive folder whose new videos are clipped. The engine checks the path
+// again (a real folder on this PC, never a network one) before it watches it.
+ipcMain.handle('pick-watch-folder', async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Choose the folder to watch',
     properties: ['openDirectory']
   })
   return result.canceled ? null : result.filePaths[0]

@@ -20,6 +20,11 @@ producing a confident answer having called nothing.
 **Nothing here does the work itself.** Every step is a call to the local API,
 the same one the window uses. The model decides what to call and in what order;
 the engine still processes video, renders clips and talks to YouTube.
+
+In the Meta hackathon edition the box runs on Muse Spark, Meta's model,
+whenever the user has saved a Meta Model API key (muse_backend below), whatever
+picks the clips. Without one, a local model that can call tools runs it as
+before; with neither, the box says how to add the key.
 """
 
 import json
@@ -154,6 +159,44 @@ def install_offer(vram_gb: float | None) -> dict:
     """
     model = "gemma4:e4b" if vram_gb and vram_gb >= 6 else "gemma4:e2b"
     return {"model": model, "size_gb": GEMMA4_DOWNLOAD_GB[model]}
+
+
+# The Muse Spark build the box runs on, the same one the captions default to
+# (remote_approval/settings.py), and the name its corner shows.
+MUSE_MODEL = "muse-spark-1.3"
+MUSE_LABEL = "Muse Spark"
+# What the box says when nothing can run it. The key is the way in, so it
+# says where the key goes rather than offering a download.
+ADD_MUSE_KEY = (
+    "Add your Meta Model API key in Settings → AI, under Direct provider API → "
+    "Meta (Muse Spark), to use this box: it runs on Muse Spark."
+)
+
+
+def muse_backend(llm_config: dict, data_dir) -> dict | None:
+    """The backend the box runs on when a Meta key is saved, or None.
+
+    Muse Spark runs the box whatever picks the clips, so a PC that picks them
+    with gemma:7b, which cannot call tools, still gets a box that works. When
+    Meta already picks the clips on a Muse Spark build of the user's choosing
+    (the cheaper -contributor one, say), the box keeps that build.
+
+    The key is read rather than looked for: a DPAPI blob that no longer
+    decrypts (data copied from another Windows account) is still a file, but
+    it is not a key, and a box offered on it would fail at its first message.
+
+    Returns a copy of llm_config. The clip picking's own settings are never
+    touched.
+    """
+    from llm.providers import keys
+    from llm.spec import parse_spec
+
+    if not data_dir or not keys.load_key(data_dir, "meta"):
+        return None
+    provider, model = parse_spec(llm_config.get("backend") or "")
+    if provider != "meta" or not model.startswith("muse-spark"):
+        model = MUSE_MODEL
+    return {**llm_config, "backend": f"meta/{model}", "data_dir": data_dir}
 
 
 def run(

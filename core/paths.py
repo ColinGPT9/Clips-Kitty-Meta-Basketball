@@ -220,6 +220,46 @@ def picked_file(
     return None
 
 
+def picked_folder(raw: str) -> Path | None:
+    """A folder the user chose to watch, or None if the request isn't one.
+
+    The folder twin of picked_file(), for a watched folder
+    (sources/folder_feed.py), where the same rules hold:
+
+    * an absolute path, resolved, so `..` segments are collapsed before
+      anything acts on it. A watch keeps its folder for good, so a relative
+      one, which means whatever the engine's working directory happens to
+      be, is refused rather than guessed at
+    * a real directory, not a file, a device or a dangling link
+    * a local folder, never a `\\\\server\\share` UNC one, whether typed or
+      reached through a mapped network drive, which resolves to its share.
+      The dialog that picks the folder offers local ones; honouring a
+      network path would let anything that can reach the API have this PC
+      keep reading the network shares it can see
+
+    Returns the resolved path, the only form anything after this uses.
+    """
+    if not raw or "\x00" in raw:
+        return None
+    if raw.startswith("\\\\") or raw.startswith("//"):
+        return None
+    # As in picked_file(), these lines are the irreducible part that CodeQL
+    # flags as py/path-injection: resolving and stat-ing the folder the
+    # person chose is what watching it means.
+    try:
+        if not Path(raw).is_absolute():
+            return None
+        path = Path(raw).resolve()
+        st = path.stat()
+    except (OSError, ValueError, RuntimeError):
+        return None
+    if not stat.S_ISDIR(st.st_mode):
+        return None
+    if str(path).startswith(("\\\\", "//")):
+        return None  # a mapped network drive resolves to its share
+    return path
+
+
 def within(base: Path, candidate: Path) -> bool:
     """True when `candidate` really sits inside `base`, symlinks resolved.
 

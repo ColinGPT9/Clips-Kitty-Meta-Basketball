@@ -21,7 +21,9 @@ import { forgetAIStatus } from '../lib/useAIStatus'
  *  Every cloud option is bring-your-own-key: the user's key and account, the
  *  provider's bill. Clips Kitty has no key of its own and proxies nothing.
  *  Nothing switches on until the user has pasted their own key and picked a
- *  model. The tiers come from the engine (GET /ai), so a new provider lands
+ *  model. The one exception, in this edition: a saved Meta key runs the
+ *  assistant box on Muse Spark at once, and the AI choice says so under its
+ *  title. The tiers come from the engine (GET /ai), so a new provider lands
  *  in the right place without touching this file. The key is write-only: the
  *  card only learns whether one is saved and its last four characters.
  */
@@ -165,10 +167,24 @@ function JobChoice({
 
   const provider = (id: string): AIProvider | undefined => usable.find((p) => p.id === id)
   const inUse = (id: string): string => (activeId === id ? activeModel : '')
+  // The assistant box runs on Muse Spark whenever a Meta key is saved,
+  // whatever is chosen here (server/agent.py, muse_backend). The title says
+  // "and the assistant", and the Ollama choice says nothing is sent anywhere,
+  // so while Meta isn't the choice here a line under the title says where
+  // the assistant really runs and what that sends. The sidebar says it too.
+  const museRunsTheAssistant =
+    job === 'ai' && activeId !== 'meta' && status.providers.some((p) => p.id === 'meta' && p.has_key)
 
   return (
     <div className="space-y-2" role="radiogroup" aria-label={title}>
       <p className="label">{title}</p>
+      {museRunsTheAssistant && (
+        <p className="text-[11px] text-muted">
+          {t(
+            'While a Meta Model API key is saved, the assistant runs on Muse Spark, whatever you choose here. What you ask it and what its tools find are sent to Meta with your key.'
+          )}
+        </p>
+      )}
 
       <TierRow
         name={`${job}-tier`}

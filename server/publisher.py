@@ -78,6 +78,15 @@ class PublishWorker(threading.Thread):
         self._campaigns_now = True
         self._wake.set()
 
+    def notify_remote_approval(self) -> None:
+        """Talk to the relay on the next turn of the loop instead of at its
+        own pace: a setting changed, an offer was cancelled from the app."""
+        state = getattr(self, "_remote_state", None)
+        if state is not None:
+            state.next_pass = 0.0
+            state.next_status = 0.0
+        self._wake.set()
+
     def stop(self) -> None:
         self._stop.set()
         self._wake.set()
@@ -99,6 +108,7 @@ class PublishWorker(threading.Thread):
                 self._refresh_missing_urls(db)
                 self._check_scheduled_youtube(db)
                 self._advance_campaigns(db)
+                self._remote_approval(db)
                 job = db.claim_next_publish_job()
                 if job is None:
                     self._wake.wait(timeout=2.0)
@@ -320,6 +330,27 @@ class PublishWorker(threading.Thread):
         """A submission changed status: the `campaign` event on /ws."""
         broadcaster.publish(event)
 
+    # ---- remote approval (WhatsApp) ----------------------------------------
+
+    def _remote_approval(self, db: StateDB) -> None:
+        """Send queued WhatsApp notifications through the relay, collect the
+        decisions made on the phone and report results back
+        (remote_approval/service.py). It paces itself: a quick look while an
+        offer is open, a slow one otherwise, nothing at all while it is
+        switched off. Contained like the provider checks: the relay being
+        unreachable must never disturb the uploads this worker runs."""
+        try:
+            from remote_approval import service as remote
+
+            state = getattr(self, "_remote_state", None)
+            if state is None:
+                state = self._remote_state = remote.TickState()
+            queued = remote.tick(db, self.data_dir, state, emit=broadcaster.publish)
+            if queued:
+                self._wake.set()
+        except Exception as e:
+            print(f"  Remote approval step failed: {e}")
+
     # ---- one job ---------------------------------------------------------
 
     def _publish(self, db: StateDB, job) -> None:
@@ -328,6 +359,15 @@ class PublishWorker(threading.Thread):
 
         job_id = job["id"]
         request_data = json.loads(job["request"])
+        if request_data.get("provider") == "meta":
+            # Approved from the phone (remote_approval/): Instagram, Facebook
+            # and Threads through the creator's own relay. Same queue, same
+            # crash rule (interrupted, never retried), same clip_publishes
+            # record as every other provider.
+            from remote_approval import publishing
+
+            publishing.run(self, db, job, request_data)
+            return
 
         clip = self._resolve_clip(db, job)
         if clip is None:

@@ -16,6 +16,7 @@ import { api } from './lib/api'
 import type { StudioEvent } from './lib/types'
 import { useEvents } from './lib/useEvents'
 import { useQueueNotifications } from './lib/queueNotifications'
+import { AI_CHANGED } from './lib/useAIStatus'
 import { OPEN_MARKETPLACE, checkOnlineListAtStart } from './lib/plugins'
 import mascot from './assets/mascot.png'
 
@@ -99,13 +100,26 @@ export default function App(): JSX.Element {
           if (s.transcription.backend !== 'local') {
             parts.push(`${t('transcription')}: ${label(s.transcription.backend)}`)
           }
+          // The assistant runs on Muse Spark whenever a Meta key is saved,
+          // even while everything else runs here (server/agent.py,
+          // muse_backend). With Meta picking the clips, the AI part says so.
+          if (s.active.provider !== 'meta' && s.providers.some((p) => p.id === 'meta' && p.has_key)) {
+            parts.push(`${t('assistant')}: Muse Spark`)
+          }
           setCloudAI(parts.join(', '))
         })
         .catch(() => setCloudAI(''))
     }
     read()
     const id = setInterval(read, 30000)
-    return () => clearInterval(id)
+    // And at once after a change in Settings → AI. Saving a Meta key moves the
+    // assistant to Muse Spark there and then, and a line still saying "no
+    // cloud AI" for the next half minute would not be true.
+    window.addEventListener(AI_CHANGED, read)
+    return () => {
+      clearInterval(id)
+      window.removeEventListener(AI_CHANGED, read)
+    }
   }, [])
   // Mounted at the shell, not on the queue page: the point of a notification
   // is to reach someone who is NOT looking at the queue.

@@ -800,6 +800,7 @@ export interface StudioEvent {
    *  nothing to do with the video pipeline's progress.
    *  'clip_replaced' is a re-render done: the clip is back under a new id. */
   type: 'progress' | 'job' | 'model_pull' | 'queue' | 'publish' | 'automation' | 'clip_replaced'
+    | 'remote_approval'
   /** clip_replaced only: the clip's id before the re-render, and after it. */
   old?: number
   new?: number
@@ -918,12 +919,17 @@ export interface PublishPlanItem {
 
 // ---- watched channels (server/automation.py) ---------------------------------
 
-export type WatchPlatform = 'youtube' | 'twitch' | 'kick'
+/** 'folder': a folder on this PC (Google Drive for desktop, Dropbox,
+ *  OneDrive) whose new video files are clipped (sources/folder_feed.py). */
+export type WatchPlatform = 'youtube' | 'twitch' | 'kick' | 'folder'
 
 /** What happens to a watched video's clips. Configured once per channel. */
 export interface WatchPublish {
-  /** off: leave them. ask: stop at "ready to publish". auto: publish at once. */
-  mode: 'off' | 'ask' | 'auto'
+  /** off: leave them. ask: stop at "ready to publish". auto: publish at once.
+   *  phone: offered on the phone (remote approval), posted from there with
+   *  the PIN, never through WoopSocial. This edition offers phone and off;
+   *  ask and auto are kept for watches set up before. */
+  mode: 'off' | 'ask' | 'auto' | 'phone'
   platforms: string[]
   /** Best clips of each video to post. 0 posts every clip. */
   max_posts: number
@@ -1006,7 +1012,8 @@ export interface WatchItem {
     | 'error'
   reason: string
   job_id: number
-  publish_state: '' | 'off' | 'ask' | 'publishing' | 'done'
+  /** 'phone': its clips went to the phone for approval (a watch set to phone). */
+  publish_state: '' | 'off' | 'ask' | 'publishing' | 'done' | 'phone'
   publish_error: string
   clips?: number
   deliveries?: WatchDelivery[]

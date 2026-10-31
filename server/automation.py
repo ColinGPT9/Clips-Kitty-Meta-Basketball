@@ -11,6 +11,12 @@ publish decision are stored; once a video has a job, the job row and
 clip_publishes are the truth about it, read live, so there is no second copy of
 state to drift.
 
+A watched folder on this PC (a Google Drive for desktop, Dropbox or OneDrive
+folder a team drops videos into, sources/folder_feed.py) is a watch like a
+channel: a file that arrives in it is a new video, copied in and queued the
+way a file added by hand is. "Ask me on my phone" hands a watch's clips to
+remote approval (remote_approval/) instead of publishing them from here.
+
 Off unless switched on. Nothing in this app starts processing on its own
 (core/queue.is_paused), so turning automation on, and each watch, is the
 standing go-ahead for exactly those videos and no others.
@@ -46,6 +52,15 @@ DEFAULT_INTERVAL_MINUTES = 15
 MIN_INTERVAL_MINUTES = 5
 # How soon to look again at a video that is live, premiering or processing.
 RECHECK_SECONDS = 15 * 60
+# The same for a watched folder's file that couldn't be read yet. It is on
+# this PC's own disk, so a minute is plenty; a channel's video waits on
+# someone else's platform.
+FOLDER_RECHECK_SECONDS = 60
+# How long a finished video of a phone watch waits for its offer before the
+# Watch page says nothing was sent. The worker makes the offer just after it
+# marks the job done (server/jobs.py _announce), after any webhook the job
+# carries has answered, so a look in between finds none yet.
+OFFER_WAIT_SECONDS = 2 * 60
 # A premiere can be scheduled days ahead; past a week it is not coming.
 GIVE_UP_SECONDS = 7 * 24 * 60 * 60
 # The "last 24 hours" catch-up policy.
@@ -73,6 +88,12 @@ DELIVERY_RETRY_DELAYS = (6 * 60 * 60, 24 * 60 * 60)
 
 _MISSED = "Posted while Clips Kitty wasn't watching."
 _BASELINE = "Posted before you started watching this channel."
+_MISSED_FILE = "Added while Clips Kitty wasn't watching."
+_BASELINE_FILE = "In the folder before you started watching it."
+# True on WhatsApp (a message was sent) and with Muse alone (nothing is sent:
+# the creator's Muse agent finds the offer when asked).
+_READY_ON_PHONE = "Ready to approve from your phone."
+_NOT_SENT = "Nothing was sent to your phone for this video."
 
 _JOB_STATES = {
     "queued": "queued",
@@ -89,7 +110,10 @@ _JOB_STATES = {
 class PublishSettings(BaseModel):
     """What to do with a watched video's clips. Configured once per channel."""
 
-    mode: Literal["off", "ask", "auto"] = "ask"
+    # "phone": offered on the phone when the clips are made (remote_approval/)
+    # and posted from there with the creator's PIN. Nothing goes through
+    # WoopSocial, and the rest of these settings are not used for it.
+    mode: Literal["off", "ask", "auto", "phone"] = "ask"
     platforms: list[str] = []
     # How many of each video's clips to post, best first. 0 posts every clip
     # the run makes; the rest stay in the library either way.
@@ -126,7 +150,8 @@ class AutomationPatch(BaseModel):
 
 
 class WatchIn(BaseModel):
-    platform: Literal["youtube", "twitch", "kick"]
+    platform: Literal["youtube", "twitch", "kick", "folder"]
+    # A channel's link or name, or for a folder the path the folder picker gave.
     channel: str = Field(min_length=1, max_length=300)
     # What happens to its clips, chosen when the channel is added, so a
     # hands-off channel is one step to set up rather than two.
@@ -155,11 +180,42 @@ def is_enabled(d: StateDB) -> bool:
     return d.get_flag(ENABLED_KEY, "0") == "1"
 
 
+def recheck_seconds(platform: str) -> float:
+    """How soon a video that isn't ready yet is looked at again."""
+    return FOLDER_RECHECK_SECONDS if platform == "folder" else RECHECK_SECONDS
+
+
 def publish_settings(watch) -> PublishSettings:
     try:
         return PublishSettings(**json.loads(watch["publish"] or "{}"))
     except Exception:
         return PublishSettings()
+
+
+def phone_problem(d: StateDB, *, offered: bool = False) -> str:
+    """Why a watch set to Ask me on my phone can't be approved from the phone,
+    named as Settings names its switches, or "" when it can. `offered` is
+    whether this video's clips really were offered when its job finished
+    (remote_approval/notifier.py): what was offered then is the truth,
+    whatever the switches say now, so the Watch page never says clips are
+    waiting when nothing was offered, nor the other way round. An offer
+    reaches the phone on WhatsApp or through the creator's Muse agent, the
+    same two ways the notifier checks."""
+    from remote_approval import settings as ra_settings
+
+    s = ra_settings.load(d)
+    where = "in Settings → Notifications & Remote Approval"
+    if not offered:
+        if not (s["whatsapp_enabled"] or ra_settings.muse_connected(s)):
+            return ("Nothing was sent to your phone. Connect your Muse agent, or set up WhatsApp and "
+                    f"turn on Send me WhatsApp messages {where}.")
+        if not s["notify_on_finish"]:
+            return f"Nothing was sent to your phone. Turn on When highlights are ready {where}."
+        return ""
+    if not s["remote_approvals"]:
+        return ("These clips were offered, but can't be approved from your phone yet. Turn on Let me "
+                f"approve publishing from my phone {where}.")
+    return ""
 
 
 def _validate_discord_destination(d: StateDB, settings: PublishSettings) -> None:
@@ -214,12 +270,19 @@ def job_payload(watch, url: str, origin: str = "watch") -> dict:
 def render_footer(template: str, item, watch) -> str:
     """Fill the source placeholders. Plain replacement, not str.format, so any
     other braces a person typed stay exactly as they typed them."""
-    values = {
-        "{source_url}": item["url"] or "",
-        "{source_title}": item["title"] or "",
-        "{source_channel}": watch["name"] or watch["channel_key"],
-        "{source_platform}": PLATFORM_NAMES.get(watch["platform"], watch["platform"]),
-    }
+    if watch["platform"] == "folder":
+        # A folder's video is a file on this PC. Its path names the folder's
+        # owner and no viewer could open it, so it has no link to give and no
+        # platform, and the folder is called by its watch's name, never its path.
+        values = {"{source_url}": "", "{source_title}": item["title"] or "",
+                  "{source_channel}": watch["name"] or "", "{source_platform}": ""}
+    else:
+        values = {
+            "{source_url}": item["url"] or "",
+            "{source_title}": item["title"] or "",
+            "{source_channel}": watch["name"] or watch["channel_key"],
+            "{source_platform}": PLATFORM_NAMES.get(watch["platform"], watch["platform"]),
+        }
     for placeholder, value in values.items():
         template = template.replace(placeholder, value)
     return template.strip()
@@ -371,11 +434,19 @@ def view_watch(d: StateDB, watch) -> dict:
 def creator_name(watch) -> str:
     """The channel name a watch's creator profile goes by, or "" when there
     is no real one. A YouTube channel whose name could not be read is known
-    only by its UC id, and a profile called that would help nobody."""
+    only by its UC id, and a profile called that would help nobody; nor
+    would one called after a folder's path."""
     name = (watch["name"] or "").strip()
-    if watch["platform"] == "youtube" and name == watch["channel_key"]:
+    if watch["platform"] in ("youtube", "folder") and name == watch["channel_key"]:
         return ""
     return name
+
+
+def creator_platform(watch) -> str:
+    """The platform a watch's creator profile is filed under. A folder's
+    videos are files from this PC, filed the way /videos/local files one
+    when no platform is chosen: under YouTube, one the Creators tab knows."""
+    return "youtube" if watch["platform"] == "folder" else watch["platform"]
 
 
 def watch_creator(d: StateDB, watch, *, create: bool = False) -> int | None:
@@ -392,12 +463,12 @@ def watch_creator(d: StateDB, watch, *, create: bool = False) -> int | None:
     if create:
         from creator import identity
 
-        return identity.resolve(d, "", name, platform=watch["platform"])
+        return identity.resolve(d, "", name, platform=creator_platform(watch))
     row = d.conn.execute(
         "SELECT creator_id FROM platform_accounts"
         " WHERE platform = ? AND platform_account_id = ? COLLATE NOCASE"
         " ORDER BY platform_account_id = ? DESC LIMIT 1",
-        (watch["platform"], name, name),
+        (creator_platform(watch), name, name),
     ).fetchone()
     return row["creator_id"] if row else None
 
@@ -470,11 +541,29 @@ class ChannelWatcher(threading.Thread):
         interval_minutes: float = DEFAULT_INTERVAL_MINUTES,
         downloads=None,
         clock=time.time,
+        folders=None,
     ):
         super().__init__(daemon=True, name="channel-watcher")
         self._downloads = downloads
         self._db = db
         self._feed = feed
+        if folders is None:
+            from sources.folder_feed import FolderFeed
+
+            folders = FolderFeed(clock=clock)
+        # Watched folders (sources/folder_feed.py): the feed for platform
+        # "folder", with the channel_feed answers and the copy into downloads/.
+        self._folders = folders
+        # Per folder watch, the files that were in it when watching resumed
+        # after a gap: they arrived unwatched, which the catch-up rule decides
+        # once each has finished arriving. In memory, like the folder feed's
+        # own record of each file.
+        self._arrived_unwatched: dict[int, set[str]] = {}
+        # When each folder watch last said it found nothing new.
+        self._quiet_said: dict[int, float] = {}
+        # Per finished video of a phone watch with no offer found yet, when
+        # that was first seen (_to_phone).
+        self._awaiting_offer: dict[int, float] = {}
         self._worker = worker
         self._broadcaster = broadcaster
         self._publisher = publisher
@@ -493,6 +582,19 @@ class ChannelWatcher(threading.Thread):
     @property
     def interval_seconds(self) -> float:
         return self._interval
+
+    @property
+    def folders(self):
+        """The feed for watched folders, which the route adding one asks too."""
+        return self._folders
+
+    def readiness(self, item, min_seconds: float):
+        """Whether a found video can be clipped now, asked of whatever found
+        it: a watched folder's file of the folder feed, anything else of the
+        channel feed."""
+        if item["platform"] == "folder":
+            return self._folders.readiness(item["url"], min_seconds, video_id=item["video_id"])
+        return self._feed.readiness(item["url"], min_seconds)
 
     def activity(self) -> dict:
         with self._activity_lock:
@@ -589,6 +691,9 @@ class ChannelWatcher(threading.Thread):
     # -- 1. look at the channel -----------------------------------------------
 
     def _poll(self, d: StateDB, watch, now: float) -> None:
+        if watch["platform"] == "folder":
+            self._poll_folder(d, watch, now)
+            return
         name = watch["name"] or watch["channel_key"]
         try:
             with self._busy(f"Checking {name} for new videos"):
@@ -636,6 +741,71 @@ class ChannelWatcher(threading.Thread):
         if fresh:
             self._broadcaster.publish({"type": "automation"})
 
+    def _poll_folder(self, d: StateDB, watch, now: float) -> None:
+        """A watched folder (sources/folder_feed.py), looked at on every tick:
+        a look is only a listing of this PC's own disk, and a video a team
+        drops in shouldn't wait a quarter of an hour.
+
+        The same steps as a channel's, with one difference: a file is found
+        once it has finished arriving, a minute or more after it appears. So
+        the first look notes every file already there without waiting (one
+        still being copied then is a different file once it has finished, by
+        its size and time, and counts as new), and when watching resumes
+        after a gap, what is in the folder at that moment is remembered as
+        having arrived unwatched, for the catch-up rule to take once it has
+        finished."""
+        name = watch["name"] or "the folder"
+        try:
+            present, settled = self._folders.look(watch["channel_key"])
+        except Exception as e:
+            if watch["last_error"] != _short(e):  # said once, not on every tick
+                self._say(f"Couldn't check {name}: {_short(e)}", "error")
+            d.set_watch(watch["id"], last_error=_short(e), next_poll_at=now + WATCH_TICK_SECONDS)
+            return
+        known = d.watch_item_ids()
+        if not watch["last_ok_poll_at"]:
+            fresh = _unseen(present, known)
+            for video in fresh:
+                self._insert(d, watch, video, now, "baseline", _BASELINE_FILE)
+            self._say(f"Now watching {name}. {len(fresh)} earlier videos noted, none clipped.", "info")
+        else:
+            unwatched = self._arrived_unwatched.setdefault(watch["id"], set())
+            if now - watch["last_ok_poll_at"] > 2 * self._interval:
+                unwatched.update(v.url for v in present if v.video_id not in known)
+            # One taken away before it finished is forgotten, so a file put
+            # there later under the same name is not taken for it.
+            unwatched.intersection_update(v.url for v in present)
+            fresh = _unseen(settled, known)
+            late = [v for v in fresh if v.url in unwatched]
+            take, hold = [v for v in fresh if v.url not in unwatched], []
+            if len(late) > 1:
+                caught, hold = self._catch_up(watch["backlog"], late, now)
+                take += caught
+            else:
+                take += late
+            unwatched.difference_update(v.url for v in fresh)
+            if not unwatched:
+                self._arrived_unwatched.pop(watch["id"], None)
+            for video in take:
+                self._insert(d, watch, video, now, "new", "")
+                # No link: the file is on this PC, and the panel opens links in a browser.
+                self._say(f"New video in {name}: {_quoted(video.title)}", "found")
+            for video in hold:
+                self._insert(d, watch, video, now, "skipped", _MISSED_FILE)
+            if hold:
+                self._say(f"{len(hold)} older video(s) in {name} were added while Clips Kitty "
+                          "wasn't watching. Set aside, one click to clip.", "info")
+            arriving = any(v.video_id not in known for v in present)
+            if not fresh and not arriving and now - self._quiet_said.get(watch["id"], 0) >= self._interval:
+                # Worth a line now and then, as for a channel, but not every
+                # thirty seconds: the panel only keeps its last few.
+                self._quiet_said[watch["id"]] = now
+                self._say(f"Checked {name}: nothing new", "info")
+        d.set_watch(watch["id"], last_ok_poll_at=now, next_poll_at=now + WATCH_TICK_SECONDS,
+                    last_error="")
+        if fresh:
+            self._broadcaster.publish({"type": "automation"})
+
     def _insert(self, d: StateDB, watch, video, now: float, state: str, reason: str) -> None:
         d.insert_watch_item(
             video.video_id, watch_id=watch["id"], platform=watch["platform"], url=video.url,
@@ -656,7 +826,8 @@ class ChannelWatcher(threading.Thread):
         if policy == "day":
             take = []
             for index, video in enumerate(fresh):
-                if not video.published_at:
+                # A folder's file is dated by its last change, already known.
+                if not video.published_at and video.platform != "folder":
                     # Twitch listings carry no dates; the video's own page does.
                     video.published_at = self._feed.readiness(video.url, 0).published_at
                 if video.published_at and now - video.published_at > DAY_SECONDS:
@@ -679,7 +850,7 @@ class ChannelWatcher(threading.Thread):
                                  reason="It never became available to download.")
                 continue
             with self._busy(f"Checking whether {_quoted(item['title'])} is ready"):
-                found = self._feed.readiness(item["url"], float(watch["min_minutes"] or 0) * 60)
+                found = self.readiness(item, float(watch["min_minutes"] or 0) * 60)
             facts = {}
             if found.title and not item["title"]:
                 facts["title"] = found.title
@@ -698,11 +869,13 @@ class ChannelWatcher(threading.Thread):
             if state == "ready":
                 d.set_watch_item(item["id"], state="waiting", reason="", **facts)
             elif state == "not_yet":
+                folder = item["platform"] == "folder"
                 if item["state"] == "new":
                     self._say(f"{_quoted(item['title'] or found.title)} isn't ready yet. "
-                              "Looking again in 15 minutes.", "waiting")
+                              + ("Looking again in a minute." if folder else "Looking again in 15 minutes."),
+                              "waiting")
                 d.set_watch_item(item["id"], state="not_ready", reason=reason,
-                                 next_check_at=now + RECHECK_SECONDS, **facts)
+                                 next_check_at=now + recheck_seconds(item["platform"]), **facts)
             else:
                 self._say(f"Skipped {_quoted(item['title'] or found.title)}: {reason}",
                           "info")
@@ -717,7 +890,14 @@ class ChannelWatcher(threading.Thread):
             if watch is None or not watch["enabled"]:
                 continue
             title = item["title"] or f"{watch['name'] or watch['channel_key']} video"
-            payload = job_payload(watch, item["url"], "manual" if item["requested"] else "watch")
+            url = item["url"]
+            if item["platform"] == "folder":
+                # Copied in first, as a file added by hand is, and queued by
+                # its id: the job reads the copy, never the folder.
+                if not self._bring_in(d, item, title):
+                    continue
+                url = f"local:{item['video_id']}"
+            payload = job_payload(watch, url, "manual" if item["requested"] else "watch")
             if item["orientation"] == "horizontal":
                 # Only reachable through Clip this (a Vertical Live watch skips
                 # these): the person asked for this landscape video, so it is
@@ -743,12 +923,53 @@ class ChannelWatcher(threading.Thread):
             # anything else they staged and have not started.
             queue.start_if_alone(d, job_id)
             d.set_watch_item(item["id"], state="queued", job_id=job_id, reason="")
-            self._say(f"Queued {_quoted(title)} for clipping", "queued", item["url"])
+            # A folder's file has no link: its url is its path on this PC.
+            self._say(f"Queued {_quoted(title)} for clipping", "queued",
+                      "" if item["platform"] == "folder" else item["url"])
             queued_any = True
         if queued_any:
             self._worker.notify()
             self._broadcaster.publish({"type": "queue"})
             self._broadcaster.publish({"type": "automation"})
+
+    def _bring_in(self, d: StateDB, item, title: str) -> bool:
+        """Copy a watched folder's file into downloads/ before its video is
+        queued (sources/folder_feed.py, sources/local_file.py), the copy its
+        job reads as local:<id>. Nothing to copy when the video is clipped
+        already, already has a job, or the queue is full: enqueue_once says
+        which, as for any video. False when the file couldn't be brought in,
+        with the reason on the item."""
+        vid = item["video_id"]
+        if d.video_status(vid) == "done" or queue.duplicate_of(d, vid) is not None or queue.capacity(d) <= 0:
+            return True
+        if self._downloads is None:
+            d.set_watch_item(item["id"], state="error", reason="Clips Kitty has no downloads folder to copy it to.")
+            return False
+        from sources.local_file import NotImported
+
+        try:
+            with self._busy(f"Copying {_quoted(title)} into Clips Kitty"):
+                imported = self._folders.bring_in(item["url"], vid, self._downloads)
+        except NotImported as e:
+            d.set_watch_item(item["id"], state="error", reason=_short(e))
+            self._say(f"Couldn't clip {_quoted(title)}: {_short(e)}", "error")
+            return False
+        except ValueError as e:  # gone from the folder, or changed since it was found
+            d.set_watch_item(item["id"], state="skipped", reason=_short(e))
+            self._say(f"Skipped {_quoted(title)}: {_short(e)}", "info")
+            return False
+        except OSError as e:
+            # FFmpeg missing, or the disk refused the copy. Said on the item,
+            # where Clip this tries again, rather than raised out of the tick,
+            # which would stop every other watch at this file each time.
+            # strerror, because the whole message names the file's path.
+            reason = f"Couldn't copy it into Clips Kitty: {e.strerror or type(e).__name__}"
+            d.set_watch_item(item["id"], state="error", reason=reason)
+            self._say(f"Couldn't clip {_quoted(title)}: {reason}", "error")
+            return False
+        # Its length, which the queue's time estimate scales by, as /videos/local records it.
+        d.upsert_video(vid, title=title, duration=imported.seconds)
+        return True
 
     def _tag_creator(self, d: StateDB, watch, video_id: str, title: str) -> None:
         """Put the video on the watch's creator before it runs, the way the
@@ -762,7 +983,7 @@ class ChannelWatcher(threading.Thread):
             from creator import identity
 
             d.upsert_video(video_id, title=title, channel_name=name)
-            identity.tag_video(d, video_id, name, platform=watch["platform"])
+            identity.tag_video(d, video_id, name, platform=creator_platform(watch))
         except Exception as e:
             print(f"Watch: couldn't link {video_id} to its creator: {e}")
 
@@ -795,6 +1016,13 @@ class ChannelWatcher(threading.Thread):
                     self._say(f"Learned {n} new thing{'' if n == 1 else 's'} about {name} "
                               f"from {_quoted(item['title'])}", "learned")
             mode = publish_settings(watch).mode
+            if mode == "phone":
+                # Offered on the phone when the job finished, and posted from
+                # there: never through WoopSocial, whatever an earlier mode or
+                # a restart left on the item.
+                if self._to_phone(d, item, watch, now):
+                    self._broadcaster.publish({"type": "automation"})
+                continue
             # A plugin this job chose to rate or understand the moments didn't
             # run: the clips were made without it, so a person looks first.
             failed = (_steps_failed(d, item, watch)
@@ -824,6 +1052,41 @@ class ChannelWatcher(threading.Thread):
                     "done",
                 )
             self._broadcaster.publish({"type": "automation"})
+
+    def _to_phone(self, d: StateDB, item, watch, now: float) -> bool:
+        """A finished video of a watch set to Ask me on my phone. Its clips
+        were offered when its job finished (remote_approval/notifier.py, even
+        when Settings offer basketball only), so this only says so, and says
+        honestly when nothing reached the phone: whether they were sent is
+        read from the offer itself, never guessed from the switches. False
+        while it waits a moment for the offer, with nothing changed."""
+        if not d.clips_for_video(item["video_id"]):
+            self._awaiting_offer.pop(item["id"], None)
+            d.set_watch_item(item["id"], publish_state="done",
+                             publish_error=_no_clips_error(d.get_outcome(item["video_id"])))
+            self._say(f"No clips were made from {_quoted(item['title'])}, so nothing was sent to your phone.",
+                      "done")
+            return True
+        from remote_approval import store as ra_store
+
+        offered = bool(item["job_id"]) and bool(ra_store.reviews_for_job(d, int(item["job_id"])))
+        problem = phone_problem(d, offered=offered)
+        if not offered and not problem:
+            # Nothing in Settings stops an offer, so it may still be on its
+            # way (OFFER_WAIT_SECONDS). Past that, none is coming: its clips
+            # were all posted already, say, or the job finished while the
+            # channel was set to something else.
+            first = self._awaiting_offer.setdefault(item["id"], now)
+            if now - first < OFFER_WAIT_SECONDS:
+                return False
+            problem = _NOT_SENT
+        self._awaiting_offer.pop(item["id"], None)
+        failed = _steps_failed(d, item, watch) if item["publish_state"] == "" else []
+        note = problem or (f"Clips Kitty made these clips without {', '.join(failed)}. "
+                           "Check them before you approve them." if failed else "")
+        d.set_watch_item(item["id"], publish_state="phone", publish_error=note, publish_retry_at=0)
+        self._say(f"Clips of {_quoted(item['title'])} are ready. {problem or _READY_ON_PHONE}", "done")
+        return True
 
     def publish(self, d: StateDB, item, watch) -> dict:
         """Send a finished video's clips out with its watch's settings."""
@@ -1090,6 +1353,16 @@ def _short(error) -> str:
     return (text.splitlines()[0] if text else type(error).__name__).replace("ERROR: ", "")[:300]
 
 
+def _unseen(videos, known: set[str]) -> list:
+    """The videos no watch has seen yet, each once, in their order."""
+    fresh, seen = [], set()
+    for video in videos:
+        if video.video_id and video.video_id not in known and video.video_id not in seen:
+            fresh.append(video)
+            seen.add(video.video_id)
+    return fresh
+
+
 # ---- routes -----------------------------------------------------------------
 
 
@@ -1105,13 +1378,16 @@ def install(
     feed=None,
     publisher=None,
     clock=time.time,
+    folders=None,
 ) -> ChannelWatcher:
     """Add the automation routes to `app`. Returns the watcher for the caller
     to start and stop with the rest of the server.
 
     `options_from` turns a watch's processing options into the job payload the
     worker reads, through the same validation a queued job's options go
-    through, so there is one set of rules for both."""
+    through, so there is one set of rules for both. `folders` is the feed for
+    watched folders (sources/folder_feed.FolderFeed), one on `clock` unless
+    given, as `feed` is the one for channels."""
     if feed is None:
         from sources import channel_feed as feed
 
@@ -1125,6 +1401,7 @@ def install(
         db, feed=feed, worker=worker, broadcaster=broadcaster, publisher=publisher,
         interval_minutes=interval_minutes, clock=clock,
         downloads=Path(data_dir) / "downloads" if data_dir is not None else None,
+        folders=folders,
     )
 
     def load_watch(d: StateDB, watch_id: int):
@@ -1251,7 +1528,19 @@ def install(
     @app.post("/automation/watches")
     def add_watch(body: WatchIn):
         try:
-            channel = feed.resolve(body.platform, body.channel)
+            if body.platform == "folder":
+                # Checked before it is kept or listed: an absolute path,
+                # resolved, a real folder, and on this PC, never a network
+                # path (folder_feed.resolve, core/paths.picked_folder).
+                channel = watcher.folders.resolve(body.platform, body.channel)
+                from core.paths import within
+
+                if data_dir is not None and within(Path(data_dir), Path(channel.channel_key)):
+                    # Its own copies in downloads/ would be found, copied in
+                    # and found again, without end.
+                    raise ValueError("Choose a folder outside Clips Kitty's own data folder.")
+            else:
+                channel = feed.resolve(body.platform, body.channel)
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
         d = db()
@@ -1336,6 +1625,11 @@ def install(
         try:
             load_watch(d, watch_id)
             d.set_watch(watch_id, next_poll_at=0)
+            # Its videos still waiting to be ready are looked at again too, so
+            # a Twitch VOD whose stream just ended is queued now, not at its
+            # next look a quarter of an hour away.
+            for item in d.watch_items(watch_id=watch_id, states=("new", "not_ready"), limit=500):
+                d.set_watch_item(item["id"], next_check_at=0)
         finally:
             d.close()
         watcher.wake()
@@ -1360,12 +1654,12 @@ def install(
             item = load_item(d, item_id)
             if item["state"] not in ("baseline", "skipped", "error"):
                 return view_item(d, item, worker)
-            found = feed.readiness(item["url"], 0)
+            found = watcher.readiness(item, 0)
             if found.state == "ready":
                 d.set_watch_item(item_id, state="waiting", reason="", requested=1)
             elif found.state == "not_yet":
                 d.set_watch_item(item_id, state="not_ready", reason=found.reason, requested=1,
-                                 detected_at=clock(), next_check_at=clock() + RECHECK_SECONDS)
+                                 detected_at=clock(), next_check_at=clock() + recheck_seconds(item["platform"]))
             else:
                 raise HTTPException(409, found.reason or "That video can't be clipped.")
             result = view_item(d, load_item(d, item_id), worker)
@@ -1383,6 +1677,10 @@ def install(
         d = db()
         try:
             item = load_item(d, item_id)
+            watch = d.get_watch(item["watch_id"])
+            if watch is not None and publish_settings(watch).mode == "phone":
+                # Never through WoopSocial: the phone is where these are posted from.
+                raise HTTPException(409, "This channel's clips are approved from your phone.")
             if item["state"] != "queued" or _job_status(d, item) != "done":
                 raise HTTPException(409, "This video's clips aren't ready yet.")
             if item["publish_state"] != "publishing" or item["publish_retry_at"]:

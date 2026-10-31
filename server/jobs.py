@@ -435,6 +435,24 @@ class Worker(threading.Thread):
                 payload.get("webhook_secret") or "",
             )
 
+        # Remote approval (remote_approval/): a finished video's clips are
+        # offered on WhatsApp (basketball only, unless Settings opts in to
+        # every video). Only database writes here, no network: the publish
+        # worker sends the message. Contained, because a notification must
+        # never fail a job that has already finished.
+        try:
+            from remote_approval import notifier
+
+            # When this run began, to the instant: the row's started_at is to
+            # the second, and a run straight after another must not offer
+            # that one's clips.
+            with self._progress_lock:
+                started = (self._progress.get(job["id"]) or {}).get("started")
+            notifier.on_job_finished(db, job, status, started=started,
+                                     data_dir=Path(self.config["paths"]["data_dir"]))
+        except Exception as e:
+            print(f"  Could not queue the WhatsApp notification: {e}")
+
     def _translate_clips(self, db: StateDB, payload: dict) -> None:
         """Multilingual publishing: subtitle tracks for finished clips.
 

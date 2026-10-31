@@ -8,8 +8,16 @@ import type { AIStatus } from './types'
 let cached: { at: number; request: Promise<AIStatus> } | null = null
 const FRESH_MS = 30_000
 
+/** Sent on window when Settings → AI has changed something, so the sidebar's
+ *  line about where the AI runs follows at once rather than at its next look.
+ *  Saving a Meta key alone moves the assistant to Muse Spark (server/agent.py,
+ *  muse_backend), and that line must not say "no cloud AI" meanwhile. */
+export const AI_CHANGED = 'ai-changed'
+
+/** Called after every change in Settings → AI: the cached answer is stale. */
 export function forgetAIStatus(): void {
   cached = null
+  window.dispatchEvent(new Event(AI_CHANGED))
 }
 
 export function useAIStatus(): AIStatus | null {

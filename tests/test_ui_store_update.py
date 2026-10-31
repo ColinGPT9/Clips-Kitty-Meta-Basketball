@@ -21,6 +21,12 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# This repository is the Meta hackathon edition and has its own README.
+# The app's README, which these checks read, is in ColinGPT9/clips-studio, where they run.
+needs_app_readme = pytest.mark.skipif(
+    "\n## Write a plugin\n" not in (ROOT / "README.md").read_text(encoding="utf-8"),
+    reason="the app's README is in ColinGPT9/clips-studio")
 MAIN = ROOT / "ui" / "src" / "main"
 
 
@@ -89,6 +95,7 @@ def test_newer_means_a_later_version_and_nothing_else(tmp_path):
     assert got == [c[2] for c in cases]
 
 
+@needs_app_readme
 def test_the_ids_are_the_ones_the_package_and_the_readme_use():
     source = (MAIN / "storeVersion.ts").read_text(encoding="utf-8")
     product = re.search(r"STORE_PRODUCT_ID = '([A-Z0-9]+)'", source).group(1)

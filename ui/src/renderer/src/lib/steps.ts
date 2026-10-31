@@ -140,9 +140,11 @@ export function editPatch(
   return { patch, clear: [] }
 }
 
-/** A watched channel's publishing, as the posting lines read it. */
+/** A watched channel's publishing, as the posting lines read it. Clips sent
+ *  to the phone ('phone') are looked at there before anything is posted, so
+ *  no line warns about them going out unchecked. */
 export interface ChannelPosting {
-  mode: 'off' | 'ask' | 'auto'
+  mode: 'off' | 'ask' | 'auto' | 'phone'
   /** Best clips of each video to post; 0 posts every clip. */
   max_posts: number
 }

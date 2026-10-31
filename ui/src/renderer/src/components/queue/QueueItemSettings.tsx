@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../../lib/api'
-import type { CaptionStyle, JobOptions, PipelineChoice, SportOption } from '../../lib/types'
+import type { CaptionStyle, JobOptions, PipelineChoice, SportOption, WatchPublish } from '../../lib/types'
 import CaptionStyleControls, { DEFAULT_CAPTION_STYLE } from '../CaptionStyleControls'
+import PipelineFields from '../PipelineFields'
 import SportFields from '../SportFields'
+import { withoutPipelineInSteps } from './AddVideos'
 import { sportForVertical, startingSport, useSports, verticalSports, verticalValue } from '../../lib/sports'
 import { watermarkSelection } from '../WatermarkCard'
 import { useEditPlugins, usePipelines, useStepPlugins } from '../../lib/plugins'
@@ -34,7 +36,9 @@ import { t } from '../../lib/i18n'
  *  Rate & understand and Suggest edits, like Pipeline, are chosen when a
  *  video is added; here they can only be kept or turned off. A watched
  *  channel (`channel`) has its options replaced on every save, so the kept
- *  choices are sent back each time. */
+ *  choices are sent back each time. A watched channel with Gaming on can also
+ *  change its gaming detector here (a game's own pipeline, such as a GTA
+ *  one), as the Add form offers it; the engine refuses what can't go together. */
 export default function QueueItemSettings({
   job,
   onSaved,
@@ -55,7 +59,7 @@ export default function QueueItemSettings({
   autoSave?: boolean
   /** A watched channel's publishing, and whether its preset makes Longform
    *  clips. Absent for a queued video. */
-  channel?: { mode: 'off' | 'ask' | 'auto'; max_posts: number; presetLongform: boolean }
+  channel?: { mode: WatchPublish['mode']; max_posts: number; presetLongform: boolean }
 }): JSX.Element {
   const s = job.settings ?? {}
   const [captions, setCaptions] = useState(s.captions !== false)
@@ -74,7 +78,11 @@ export default function QueueItemSettings({
   // be kept or turned off, which the modes that pick moments their own way need.
   const [pipeline, setPipeline] = useState<PipelineChoice | null>(s.pipeline ?? null)
   const pipelineId = s.pipeline?.id
-  const pipelineName = usePipelines()?.find((p) => p.id === pipelineId)?.name ?? pipelineId
+  const pipelines = usePipelines()
+  const pipelineName = pipelines?.find((p) => p.id === pipelineId)?.name ?? pipelineId
+  // A watched channel with Gaming on picks its gaming detector here, as the
+  // Add form does, so Pipeline's keep-or-turn-off switch gives way to it.
+  const detector = Boolean(channel) && gaming
   // Rate & understand, kept or turned off. Set from the settings as the panel
   // opens, so opening it never saves.
   const [stepsKept, setStepsKept] = useState(Boolean(s.rate?.length || s.understand?.length))
@@ -138,7 +146,10 @@ export default function QueueItemSettings({
       } else clear.push('watermark_profile_id')
       patch.caption_style = style
       patch.clear = clear
-      await (saveTo ? saveTo(patch) : api.patchJob(job.id, patch))
+      // A detector chosen here can't also rate or understand the moments it
+      // found (the engine refuses that), so it leaves those lists, as in the Add form.
+      const sent = channel ? withoutPipelineInSteps(patch) : patch
+      await (saveTo ? saveTo(sent) : api.patchJob(job.id, sent))
       setSaved(true)
       setTimeout(() => setSaved(false), 2500)
       onSaved()
@@ -313,6 +324,7 @@ export default function QueueItemSettings({
             'A match or a game (Soccer, Basketball): its moments from the crowd, the commentary and the scoreboard, one clip per moment, and a 9:16 crop that follows the play.'
           )}
         {s.pipeline &&
+          !detector &&
           toggle(
             'Pipeline',
             `(${pipelineName})`,
@@ -408,6 +420,25 @@ export default function QueueItemSettings({
       {sport && sports.length > 0 && (
         <div className="flex items-center gap-3 flex-wrap">
           <SportFields value={sport} sports={sports} onChange={setSport} noCrop={verticalLive} />
+        </div>
+      )}
+
+      {detector && (
+        <div className="flex items-center gap-3 flex-wrap">
+          <PipelineFields
+            value={pipeline ?? { id: '' }}
+            pipelines={pipelines?.filter((p) => p.category === 'gaming' || p.id === pipeline?.id) ?? null}
+            label={t('Gaming detector')}
+            defaultChoiceLabel={t('All games (Clips Kitty)')}
+            showSettings={false}
+            name={t('This channel')}
+            onChange={(choice) => {
+              if (choice.id) {
+                setPipeline(choice)
+                setGamingScoring(false)
+              } else setPipeline(null)
+            }}
+          />
         </div>
       )}
 

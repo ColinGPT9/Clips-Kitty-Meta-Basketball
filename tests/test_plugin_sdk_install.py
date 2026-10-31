@@ -28,6 +28,12 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# This repository is the Meta hackathon edition and has its own README.
+# The app's README, which these checks read, is in ColinGPT9/clips-studio, where they run.
+needs_app_readme = pytest.mark.skipif(
+    "\n## Write a plugin\n" not in (ROOT / "README.md").read_text(encoding="utf-8"),
+    reason="the app's README is in ColinGPT9/clips-studio")
 SDK = ROOT / "sdk" / "python"
 if str(SDK) not in sys.path:
     sys.path.insert(0, str(SDK))
@@ -332,6 +338,7 @@ def test_install_says_what_is_wrong_with_an_answer_that_isnt_clips_kittys(capsys
         "Still watching: save again to try again."]
 
 
+@needs_app_readme
 def test_install_follows_no_redirect_to_another_address(capsys, monkeypatch, apps, plugin, data_dir):
     """A redirect to another address, even one on this PC, isn't followed,
     so the session header goes nowhere but the address install was given."""

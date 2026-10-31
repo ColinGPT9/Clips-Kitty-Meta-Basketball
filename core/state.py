@@ -254,6 +254,77 @@ CREATE TABLE IF NOT EXISTS app_state (
     value TEXT NOT NULL
 );
 
+-- Remote approval (remote_approval/): a finished video's clips, offered to the
+-- creator on WhatsApp, approved on their phone, and published from this PC.
+--
+-- One row per offer, not per job: an offer that expired is followed by a new
+-- one for the same job, and the old row stays as the record of what was
+-- offered. `clips` is a snapshot (ids, times, file size and mtime) and
+-- `fingerprint` its hash, so an approval is only ever applied to exactly the
+-- files that were offered: a clip re-rendered since is a different file and
+-- needs a new approval. PROCESSING and RENDERING are not stored here; they
+-- are the jobs row's own state (remote_approval/states.py).
+CREATE TABLE IF NOT EXISTS remote_reviews (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id      INTEGER NOT NULL,
+    video_id    TEXT NOT NULL DEFAULT '',
+    title       TEXT NOT NULL DEFAULT '',
+    state       TEXT NOT NULL,
+    clips       TEXT NOT NULL DEFAULT '[]',
+    fingerprint TEXT NOT NULL DEFAULT '',
+    summary     TEXT NOT NULL DEFAULT '{}',
+    captions    TEXT NOT NULL DEFAULT '{}',  -- Muse Spark's text, made once and kept
+    approval_id TEXT NOT NULL DEFAULT '',    -- the relay's id for this offer
+    decision    TEXT NOT NULL DEFAULT '{}',  -- what the phone approved
+    results     TEXT NOT NULL DEFAULT '{}',  -- per clip, per platform, as the APIs confirmed
+    error       TEXT NOT NULL DEFAULT '',
+    expires_at  TEXT NOT NULL DEFAULT '',
+    remind_at   TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_remote_reviews_job ON remote_reviews(job_id);
+
+-- What has to reach the relay, kept until it has. A notification decided while
+-- the relay or the internet is down is sent when they come back, once:
+-- event_key is unique, so the same job announced twice queues one message.
+CREATE TABLE IF NOT EXISTS remote_outbox (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_key   TEXT NOT NULL UNIQUE,
+    kind        TEXT NOT NULL,               -- ready | failed | result | test
+    review_id   INTEGER NOT NULL DEFAULT 0,
+    body        TEXT NOT NULL DEFAULT '{}',
+    status      TEXT NOT NULL DEFAULT 'pending',  -- pending | sent | failed | dropped
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    error       TEXT NOT NULL DEFAULT '',
+    next_try_at TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
+-- Every command the relay handed over, by the relay's id. A command delivered
+-- twice (a poll that timed out after the relay answered) is found here and
+-- acknowledged again, never applied again.
+CREATE TABLE IF NOT EXISTS remote_commands (
+    command_id  TEXT PRIMARY KEY,
+    review_id   INTEGER NOT NULL DEFAULT 0,
+    kind        TEXT NOT NULL,
+    outcome     TEXT NOT NULL,               -- accepted | rejected | ignored
+    reason      TEXT NOT NULL DEFAULT '',
+    received_at TEXT NOT NULL
+);
+
+-- Who did what to an offer, in order: the audit log Settings shows. Never
+-- holds a token, a phone number or a PIN.
+CREATE TABLE IF NOT EXISTS remote_audit (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    review_id INTEGER NOT NULL DEFAULT 0,
+    actor     TEXT NOT NULL,                 -- desktop | relay | phone | publisher
+    action    TEXT NOT NULL,
+    detail    TEXT NOT NULL DEFAULT '',
+    at        TEXT NOT NULL
+);
+
 -- A livestream an integration (the OBS plugin) handed over after it ended. One
 -- row per stream: session_id comes from the integration, so a repeated request,
 -- or the same stream reported again after a crash, lands on this row instead of

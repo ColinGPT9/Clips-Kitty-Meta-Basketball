@@ -4,7 +4,7 @@
 
 API version **1** (`GET /health` → `api_version`). The engine listens on `http://127.0.0.1:8765`. How to call it, with examples and the gotchas, is in [`docs/API.md`](../API.md); what the labels promise is in [API](api.md).
 
-251 routes: **60 stable**, **47 experimental**, 144 internal.
+272 routes: **60 stable**, **47 experimental**, 165 internal.
 
 | Label | Promise |
 |---|---|
@@ -229,6 +229,7 @@ Everything else. Grouped by the first part of the path; the module is where it i
 | `/models` | `GET /models/pulls`<br>`DELETE /models/{tag:path}` | `server.api` |
 | `/publish` | `POST /publish/{job_id}/cancel` | `server.youtube_api` |
 | `/queue` | `POST /queue/clear` | `server.api` |
+| `/remote-approval` | `POST /remote-approval/accounts/connect`<br>`POST /remote-approval/accounts/disconnect`<br>`GET /remote-approval/audit`<br>`POST /remote-approval/disconnect`<br>`POST /remote-approval/muse/revoke`<br>`POST /remote-approval/muse/token`<br>`POST /remote-approval/pair/confirm`<br>`POST /remote-approval/pair/start`<br>`POST /remote-approval/pin`<br>`POST /remote-approval/refresh`<br>`POST /remote-approval/register`<br>`GET /remote-approval/reviews`<br>`GET /remote-approval/reviews/{review_id}`<br>`POST /remote-approval/reviews/{review_id}/ask-again`<br>`POST /remote-approval/reviews/{review_id}/cancel`<br>`POST /remote-approval/reviews/{review_id}/resend`<br>`POST /remote-approval/reviews/{review_id}/retry`<br>`PATCH /remote-approval/settings`<br>`GET /remote-approval/status`<br>`POST /remote-approval/templates`<br>`POST /remote-approval/test` | `server.remote_approval_api` |
 | `/remote-render` | `GET /remote-render`<br>`PUT /remote-render`<br>`POST /remote-render/jobs/{job_id}/retry`<br>`POST /remote-render/pairing-code`<br>`PUT /remote-render/this-pc`<br>`POST /remote-render/this-pc/unpair`<br>`POST /remote-render/videos/{video_id}/render-locally`<br>`DELETE /remote-render/workers/{worker_id}`<br>`POST /remote-render/workers/{worker_id}/hold` | `remote_render.service` |
 | `/settings` | `GET /settings`<br>`PATCH /settings` | `server.api` |
 | `/sources` | `GET /sources/frame`<br>`GET /sources/people`<br>`GET /sources/snap`<br>`GET /sources/suggest` | `server.api` |

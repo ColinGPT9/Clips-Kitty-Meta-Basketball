@@ -2,7 +2,7 @@
 
 This page builds a pipeline plugin for one game, from nothing to a plugin Clips Kitty runs. The game is **Quarkbloom Arena, a made-up game**: when a player makes a big play, a red "quark burst" banner shows at the top of the screen and the crowd gets loud. The plugin finds those moments in a recording, and Clips Kitty turns them into clips. Your game will show something else; the steps are the same.
 
-> **Which Clips Kitty runs it.** Clips Kitty 2.1.0 is the first release that runs plugins, and it comes with SDK 1.3.0. Steps 1 to 6 don't need Clips Kitty: only Python, FFmpeg and Git (for step 1's install). Step 7 needs Clips Kitty 2.1.0 or later, or one run from source ([From source](../../README.md#from-source)).
+> **Which Clips Kitty runs it.** Clips Kitty 2.1.0 is the first release that runs plugins, and it comes with SDK 1.3.0. Steps 1 to 6 don't need Clips Kitty: only Python, FFmpeg and Git (for step 1's install). Step 7 needs Clips Kitty 2.1.0 or later, or one run from source ([From source](https://github.com/ColinGPT9/clips-studio#from-source)).
 
 You need:
 - **Python 3.11**, the Python Clips Kitty runs plugins on. The SDK works on 3.10 or newer, but test on 3.11: newer Python code fails there.
@@ -337,7 +337,7 @@ python -m clipskitty_sdk listing quarkbloom-bursts --section gaming/generic
 - It sees only the banner's part of the screen and how loud the video is. It can't read the banner's words; anything else of that colour in that place fools it; a big play without the banner is missed.
 - A stream that moves the game (a webcam over it, or the game shown smaller) puts something else in the region. Such a stream needs its own `banner_region`.
 - Loud isn't the same as exciting: commentary or music at the same volume all along hides the crowd.
-- It finds moments only. Saying what happens in them (understand) and scoring moments others found (rate) are other plugins' steps, or other templates ([Steps](steps.md)). Edit plugins suggest edits for the clips ([Steps](steps.md)). Posting isn't a plugin step: Clips Kitty posts clips itself, and through [WoopSocial](https://woopsocial.com/?via=clipskitty) it can post to many sites at once on the creator's own account ([Publish to every platform at once](../../README.md#publish-to-every-platform-at-once)).
+- It finds moments only. Saying what happens in them (understand) and scoring moments others found (rate) are other plugins' steps, or other templates ([Steps](steps.md)). Edit plugins suggest edits for the clips ([Steps](steps.md)). Posting isn't a plugin step: Clips Kitty posts clips itself, and through [WoopSocial](https://woopsocial.com/?via=clipskitty) it can post to many sites at once on the creator's own account ([Publish to every platform at once](https://github.com/ColinGPT9/clips-studio#publish-to-every-platform-at-once)).
   <sub>Affiliate link - Clips Kitty may earn a commission if you sign up through it, at no extra cost to you.</sub>
 - It runs on the creator's PC with the creator's rights, like any program; Clips Kitty doesn't sandbox it ([Security](security.md)).
 

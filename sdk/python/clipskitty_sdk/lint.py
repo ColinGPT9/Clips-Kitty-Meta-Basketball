@@ -39,8 +39,8 @@ from .host import APP_PYTHON
 # ENGINE_PACKAGES; tests/test_script_host.py checks the two lists agree).
 ENGINE_PACKAGES = frozenset({
     "analysis", "campaigns", "connected_accounts", "core", "creator", "gaming", "llm", "longform",
-    "main", "multilingual", "plugins", "publish", "remote_render", "server", "sources", "sports",
-    "stream_workflows", "third_party", "transcription", "video", "video_editor",
+    "main", "multilingual", "plugins", "publish", "remote_approval", "remote_render", "server", "sources",
+    "sports", "stream_workflows", "third_party", "transcription", "video", "video_editor",
     "_clipskitty_script_host",
 })
 

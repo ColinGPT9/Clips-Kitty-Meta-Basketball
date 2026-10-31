@@ -148,6 +148,7 @@ export const api = {
         podcast: opts.podcast ?? null,
         vertical_live: opts.vertical_live ?? null,
         gaming: opts.gaming ?? null,
+        gaming_scoring: opts.gaming_scoring ?? null,
         gaming_layout: opts.gaming_layout ?? null,
         gaming_remember: opts.gaming_remember ?? null,
         source_url: opts.source_url ?? '',
@@ -155,7 +156,12 @@ export const api = {
         watermark_profile_id: opts.watermark_profile_id ?? null,
         filter: opts.filter ?? null,
         min_score: opts.min_score ?? null,
+        focus: opts.focus ?? null,
+        sport: opts.sport ?? null,
         max_clips: opts.max_clips ?? null,
+        pipeline: opts.pipeline ?? null,
+        rate: opts.rate ?? null,
+        understand: opts.understand ?? null,
         force: opts.force ?? false
       })
     }),
@@ -281,7 +287,10 @@ export const api = {
     }),
   /** Whether the assistant can run, and which model it would use. The app's
    *  default scoring model cannot call tools, so this is a real question.
-   *  `install` is the Gemma 4 build to offer when no installed model can. */
+   *  With a Meta Model API key saved it runs on Muse Spark (`model` says so).
+   *  `install` is the Gemma 4 build to offer when no installed model can;
+   *  this edition sends `add_key` instead: the provider whose key would make
+   *  it work ('meta'), for the box to open that setup. */
   agentStatus: () =>
     request<{
       ready: boolean
@@ -289,6 +298,7 @@ export const api = {
       configured: string
       reason: string
       install?: { model: string; size_gb: number } | null
+      add_key?: string | null
     }>('/agent/status'),
   /** One exchange with the assistant. `steps` is what it actually did, `plan`
    *  is a proposed batch of uploads that NOTHING has acted on yet. */

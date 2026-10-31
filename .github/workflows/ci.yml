@@ -36,7 +36,7 @@ jobs:
       - name: Compile every module
         # Catches syntax errors across the whole engine in seconds, without
         # installing PyTorch. Import checking would need ~4 GB of wheels.
-        run: python -m compileall -q analysis connected_accounts core creator llm longform multilingual plugins publish sdk server sources sports stream_workflows transcription video video_editor main.py
+        run: python -m compileall -q analysis connected_accounts core creator llm longform multilingual plugins publish remote_approval sdk server sources sports stream_workflows transcription video video_editor main.py
 
       - name: Install what these checks need
         # NOT requirements.txt — that pulls ~4 GB of PyTorch wheels to run a
@@ -184,6 +184,25 @@ jobs:
         # A build failure is the difference between "types are fine" and
         # "this actually packages", and it is what the installer depends on.
         run: npm run build
+
+  meta-relay:
+    name: Meta relay
+    runs-on: ubuntu-latest
+    # The Cloudflare Worker behind WhatsApp notifications and remote approval
+    # (meta-relay/), run under Node with D1 on node:sqlite and Meta faked. It
+    # has no dependencies to install.
+    defaults:
+      run:
+        working-directory: meta-relay
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Relay tests
+        run: node --no-warnings --experimental-sqlite --test test/*.test.mjs
 
   vendored:
     name: Vendored code unchanged

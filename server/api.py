@@ -25,11 +25,12 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from core import queue
-from core.binaries import ffmpeg, ffprobe
+from core.binaries import ffmpeg
 from core.paths import discard, picked_file, safe_name
 from core.state import StateDB
 from server.events import broadcaster
 from server.jobs import Worker
+from sources import local_file
 
 # Version of the supported API described in docs/API.md. Bumped only when a
 # supported endpoint changes shape, never for additions.
@@ -206,10 +207,11 @@ class BrandingIn(BaseModel):
 
 # What the two "import a file from this computer" endpoints will accept. Kept
 # next to the models that carry those paths so the two stay in step, and passed
-# to picked_file() so a path is rejected before anything opens it.
+# to picked_file() so a path is rejected before anything opens it. The video
+# list lives with the rest of what a file from this computer is
+# (sources/local_file.py), where a watched folder reads it too.
 _IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
-_VIDEO_SUFFIXES = (".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi", ".flv", ".ts", ".mpg",
-                   ".mpeg", ".wmv", ".m2ts", ".mts")
+_VIDEO_SUFFIXES = local_file.VIDEO_SUFFIXES
 
 
 class BrandingAssetIn(BaseModel):
@@ -808,6 +810,14 @@ def create_app(config: dict, settings_path: Path) -> FastAPI:
     discord_api.install(app, db=db, data_dir=data_dir, session_secret=desktop_session,
                         publish_worker=publish_worker)
 
+    # Settings → Notifications & Remote Approval (remote_approval/): WhatsApp
+    # notifications and publishing approved from the phone, through the
+    # creator's own relay. Its changing routes take the same session secret.
+    from server import remote_approval_api
+
+    remote_approval_api.install(app, db=db, data_dir=data_dir, session_secret=desktop_session,
+                                publish_worker=publish_worker)
+
     # Clipping campaigns and their submissions (campaigns/): the publish
     # worker follows each post and sends what a webhook may send.
     from server import campaigns_api
@@ -1033,9 +1043,6 @@ def create_app(config: dict, settings_path: Path) -> FastAPI:
         anywhere. The user's title/creator/platform fill the same fields a
         downloaded video would get, so it lands in the library and the
         Creators tab exactly like a processed URL."""
-        import hashlib
-        import subprocess as sp
-
         # Normalised and checked before anything reads it — see picked_file().
         # The path comes from a native file dialog, so a rejection here means
         # the request did not come from the app. It hands back the resolved
@@ -1046,57 +1053,17 @@ def create_app(config: dict, settings_path: Path) -> FastAPI:
             raise HTTPException(400, f"not a video file this app can open: {body.path}")
         src, _suffix, src_stat = picked
 
-        # Must contain a video stream (catches audio files / random files).
-        probe = sp.run(
-            [ffprobe(), "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=codec_name", "-of", "csv=p=0", str(src)],
-            capture_output=True, text=True,
-        )
-        if probe.returncode != 0 or not probe.stdout.strip():
-            raise HTTPException(400, "that file doesn't look like a video")
-
-        # Length, while we already have the file open. Local files are the one
-        # path where the queue can know a video's duration before it runs, and
-        # duration is what its time estimate scales by.
-        seconds = 0.0
-        try:
-            dur = sp.run(
-                [ffprobe(), "-v", "error", "-show_entries", "format=duration",
-                 "-of", "csv=p=0", str(src)],
-                capture_output=True, text=True,
-            )
-            seconds = float(dur.stdout.strip() or 0)
-        except (ValueError, OSError):
-            pass  # only costs a less precise estimate
-
-        # usedforsecurity=False because this is a naming scheme, not a defence:
-        # it turns a path into a stable short id so re-importing the same file
-        # reuses its downloads/ entry. Nothing trusts it, and collisions cost a
-        # duplicate import rather than anything worse. Saying so explicitly
-        # keeps the security scanners from reading it as a weak digest.
-        #
+        # The video stream check, the length, the id and the copy into
+        # downloads/, shared with watched folders (sources/local_file.py), so
+        # a file added here and found in a watched folder is one video.
         # src is already resolved and src_stat already taken, both by
-        # picked_file() — re-doing either here would be a second unchecked
-        # look at the same user-supplied string.
-        vid = "local_" + hashlib.md5(
-            f"{src}|{src_stat.st_size}|{int(src_stat.st_mtime)}".encode(),
-            usedforsecurity=False,
-        ).hexdigest()[:12]
-        dest = data_dir / "downloads" / f"{vid}.mp4"
-        dest.parent.mkdir(parents=True, exist_ok=True)
-
-        # H.264, H.265, AV1 and VP9 are stream-copied into the pipeline's mp4
-        # layout, which takes seconds; the job converts the slow three to
-        # H.264 where the window can show it. Anything else (ProRes, old AVI
-        # codecs) is converted here. Never left half-written: see
-        # import_local_source, and #122 for what a half-written copy cost.
-        from video.encoding import import_local_source
-
-        if not import_local_source(src, dest, probe.stdout.strip()):
-            raise HTTPException(
-                400,
-                "couldn't convert this file — export it as MP4 (H.264) and try again",
-            )
+        # picked_file() — re-doing either would be a second unchecked look at
+        # the same user-supplied string.
+        try:
+            imported = local_file.bring_in(src, src_stat, data_dir / "downloads")
+        except local_file.NotImported as e:
+            raise HTTPException(400, str(e)) from e
+        vid, seconds = imported.video_id, imported.seconds
 
         title = body.title.strip() or src.stem
         platform = body.platform if body.platform in ("youtube", "twitch", "kick") else "youtube"
@@ -2823,9 +2790,23 @@ def create_app(config: dict, settings_path: Path) -> FastAPI:
         The app's default clip-scoring model cannot call tools, so this is a
         real question rather than a formality, and the answer belongs in the
         window instead of arriving as a confusing reply.
+
+        A saved Meta Model API key answers it first: the box then runs on
+        Muse Spark, whatever picks the clips. Without one it runs on what it
+        always has, and when nothing can, it says how to add the key.
         """
         from llm.spec import is_local, parse_spec
-        from server.agent import install_offer, usable_model
+        from server.agent import ADD_MUSE_KEY, MUSE_LABEL, muse_backend, usable_model
+
+        muse = muse_backend(config["llm"], config["llm"].get("data_dir") or data_dir)
+        if muse:
+            return {
+                "ready": True,
+                "model": MUSE_LABEL,
+                "configured": muse["backend"],
+                "reason": "",
+                "install": None,
+            }
 
         backend_spec = config["llm"].get("backend") or ""
         if not is_local(backend_spec):
@@ -2862,40 +2843,41 @@ def create_app(config: dict, settings_path: Path) -> FastAPI:
 
         configured = (config["llm"].get("backend") or "").split("/")[-1]
         model = usable_model(ollama_host, configured)
-        return {
-            "ready": bool(model),
-            "model": model,
-            "configured": configured,
-            "reason": "" if model else (
-                "No installed model can use tools. Install Gemma 4 on the Models page: "
-                "gemma4:e4b for a 6 GB graphics card, gemma4:e2b for less. "
-                "Or use OpenRouter with your own key in Settings → AI."
-            ),
-            # The build for this machine, so the box can offer the download
-            # itself and nobody has to work out which of the two they need.
-            "install": None if model else install_offer(_nvidia_vram_gb()),
-        }
+        if not model:
+            # Nothing on this PC can call tools. This edition's box runs on
+            # Muse Spark, so the way in is the user's own Meta key rather than
+            # a Gemma 4 download. add_key names the provider whose setup the
+            # box's button opens.
+            return {
+                "ready": False,
+                "model": "",
+                "configured": configured,
+                "reason": ADD_MUSE_KEY,
+                "install": None,
+                "add_key": "meta",
+            }
+        return {"ready": True, "model": model, "configured": configured, "reason": "", "install": None}
 
     @app.post("/agent/chat")
     def agent_chat(body: AgentIn):
         """One exchange with the assistant."""
         from llm.spec import is_local
-        from server.agent import run, run_cloud, usable_model
+        from server.agent import ADD_MUSE_KEY, muse_backend, run, run_cloud, usable_model
         from server.mcp import TOOLS
 
         if not body.message.strip():
             raise HTTPException(400, "Say what you would like done.")
 
-        cloud = not is_local(config["llm"].get("backend") or "")
+        # The same choice /agent/status reports: a saved Meta key runs the box
+        # on Muse Spark, even while a model on this PC picks the clips.
+        muse = muse_backend(config["llm"], config["llm"].get("data_dir") or data_dir)
+        cloud = bool(muse) or not is_local(config["llm"].get("backend") or "")
         model = ""
         if not cloud:
             configured = (config["llm"].get("backend") or "").split("/")[-1]
             model = usable_model(ollama_host, configured)
             if not model:
-                raise HTTPException(
-                    400,
-                    "No installed model can use tools. Install Gemma 4 on the Models page.",
-                )
+                raise HTTPException(400, ADD_MUSE_KEY)
 
         # The plan tool's structured items go to the window, which turns them
         # into a Confirm button; the model only needs to describe the plan.
@@ -2973,7 +2955,7 @@ def create_app(config: dict, settings_path: Path) -> FastAPI:
                 from llm.registry import create_backend
 
                 return run_cloud(body.message, body.history, TOOLS, call_tool,
-                                 create_backend(config["llm"]))
+                                 create_backend(muse or config["llm"]))
             return run(
                 body.message, body.history, TOOLS, call_tool, ollama_host, model,
                 # Never below 16K: the tool list alone fills most of Ollama's 4K default.
