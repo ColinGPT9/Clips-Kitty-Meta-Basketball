@@ -1,9 +1,60 @@
 # Architecture
 
-Three pieces: the creator's Windows PC (Clips Kitty, unchanged pipeline),
-a small relay the creator deploys once (Cloudflare Worker + D1), and Meta's
-official APIs. The PC never accepts a connection from the internet; it only
-calls out to the relay.
+Meta's pieces in blue, E-BARD in orange. The same diagram is in the
+[README](../../../README.md#architecture).
+
+```mermaid
+flowchart TD
+    G["Shared Google Drive folder<br/>the video team drops each quarter in"]
+    subgraph PC["The office PC: Clips Kitty"]
+        F["Folder watch<br/>takes each file once it stops changing"]
+        E["E-BARD (YOLOv8n)<br/>ball · hoop · players · referees"]
+        Y["YOLOv8 + OpenCV · RapidOCR · PANNs<br/>shots · cutaways · score bug · crowd"]
+        B["Basketball pipeline<br/>plays from the score bug, the commentary and the crowd"]
+        R["9:16 clips<br/>the crop follows the play"]
+        O["The offer<br/>this run's clips, counted by play"]
+        K["Ask Clips Kitty<br/>the assistant in the app"]
+    end
+    MV["Muse Voice Transcribe<br/>the commentary"]
+    MS["Muse Spark<br/>picks the plays · titles · captions · the assistant"]
+    subgraph RL["Your relay: one Cloudflare Worker"]
+        Q["Offers · the PIN check · Meta's tokens"]
+    end
+    MU["Your Muse agent, in the Muse app<br/>what's ready · the approval link · what got posted"]
+    P["The approval page on your phone<br/>clips · platforms · confirm · PIN"]
+    WA["WhatsApp Cloud API<br/>optional messages"]
+    IG["Instagram Reels<br/>Instagram Graph API"]
+    FB["Facebook Page Reels"]
+    TH["Threads<br/>a post linking to the Reel"]
+    G --> F
+    F --> E
+    F --> Y
+    E --> B
+    Y --> B
+    B --> R
+    R --> O
+    MV -.->|Meta Model API, your key| B
+    MS -.->|Meta Model API, your key| B
+    MS -.->|captions| O
+    MS -.->|tool calls| K
+    O -->|signed, outbound only| Q
+    MU -->|MCP connector| Q
+    P --> Q
+    Q --> WA
+    Q -->|the approved files| IG
+    Q -->|the approved files| FB
+    Q --> TH
+    classDef meta fill:#0866FF,stroke:#0049B7,color:#fff
+    classDef ebard fill:#f58426,stroke:#a8551a,color:#000
+    class MV,MS,MU,WA,IG,FB,TH meta
+    class E ebard
+```
+
+In detail: three pieces. The creator's Windows PC runs Clips Kitty with
+the pipeline unchanged. A small relay the creator deploys once (Cloudflare
+Worker + D1) talks to Meta's official APIs. The PC never accepts a
+connection from the internet; it only calls out to the relay, and to
+Meta's Model API for Muse Spark and Muse Voice on the creator's own key.
 
 ```
  Creator's Windows PC (127.0.0.1 only)                Relay (Cloudflare Worker, D1)              Meta

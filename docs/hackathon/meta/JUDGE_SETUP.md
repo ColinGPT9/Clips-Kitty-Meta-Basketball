@@ -37,10 +37,7 @@ and the rest of `requirements.txt`).
 
 Muse itself needs the relay on a public address, but its connector can be
 called on your machine. This needs the app running from source in this
-repository: `pip install -r requirements.txt`, then `npm install` and
-`npm run dev` in `ui/`. These are the main [README](../../../README.md)'s
-*From source* steps without its first two lines, which clone the original
-Clips Kitty instead.
+repository, as in the README's [Quick start](../../../README.md#quick-start).
 
 1. `cd meta-relay && npm run dev`. It prints the address
    (`http://127.0.0.1:8787`) and the enrolment key.
@@ -104,11 +101,8 @@ and Instagram/Facebook/Threads accounts with a role on the app. These steps
 have not been run against live Meta, WhatsApp or Muse services yet: every
 run so far had Meta's servers faked.
 
-1. Run Clips Kitty from source in this repository (Windows):
-   `pip install -r requirements.txt`, then in `ui/` run `npm install` and
-   `npm run dev`. These are the main [README](../../../README.md)'s *From
-   source* steps without its first two lines, which clone the original Clips
-   Kitty instead.
+1. Run Clips Kitty from source in this repository (Windows), as in the
+   README's [Quick start](../../../README.md#quick-start).
 2. Deploy the relay and connect WhatsApp: [WHATSAPP_SETUP.md](WHATSAPP_SETUP.md).
 3. Add Facebook Login for Business and the Threads API, and connect the
    accounts: [META_PUBLISHING.md](META_PUBLISHING.md).
@@ -118,7 +112,9 @@ run so far had Meta's servers faked.
    **Transcription** choose Meta's `muse-voice-transcribe-1.0`. Then turn on
    **Write captions with Muse Spark** in section 5 of Settings →
    Notifications & Remote Approval. The same key runs **Ask Clips Kitty**,
-   the box at the bottom of the app, on Muse Spark.
+   the box at the bottom of the app, on Muse Spark. For Muse Spark to pick
+   the plays and write the titles too, choose Meta (Muse Spark) under **Clip
+   picking, titles and the assistant**.
 6. Optional: connect your Muse agent ([MUSE_CONNECTOR.md](MUSE_CONNECTOR.md)).
    With Muse connected, a WhatsApp number is optional.
 7. Process a short basketball clip with the Basketball sport selected, or

@@ -20,9 +20,16 @@ import sys
 import unicodedata
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# This repository is the Meta hackathon edition and has its own README.
+# The app's README, which these checks read, is in ColinGPT9/clips-studio, where they run.
+needs_app_readme = pytest.mark.skipif(
+    "\n## Write a plugin\n" not in (ROOT / "README.md").read_text(encoding="utf-8"),
+    reason="the app's README is in ColinGPT9/clips-studio")
 SDK = ROOT / "sdk" / "python"
 for path in (str(ROOT), str(SDK)):
     if path not in sys.path:
@@ -235,6 +242,7 @@ def _repo_url_problem(url: str) -> str | None:
     return "not an address this checkout backs"
 
 
+@needs_app_readme
 def test_every_url_is_one_confirmed():
     urls = {u.rstrip(".,;:") for u in re.findall(r"https?://[^\s<>()\"'`\]]+", text())}
     problems = []

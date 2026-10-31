@@ -66,13 +66,13 @@ isn't live by recording day is cut, never faked.
 | 0:15 | What was missing | A wide frame of the public-domain game beside its 9:16 clip | "There's a lot of open-source basketball computer vision, but I couldn't find an open-source tool that turns an NBA broadcast into vertical clips that follow the ball. So I built one." | No |
 | 0:27 | The job | More finished clips | "Say you're the social media manager for an NBA team, running its Instagram, Facebook and Threads. Your clips need to go up during the game or right after, while people are still talking about it." | No |
 | 0:42 | Before tip-off | The Watch page: **Watch channels** on, the Drive folder watch on **Ask me on my phone** with Sports → Basketball. Then Settings → **2. Your Muse agent**, connected. Press nothing there: a new key or Revoke stops the key Muse has | "Before tip-off, you point Clips Kitty at the team's shared Drive folder on the office PC, and connect your Muse agent with one key." | Relay deployed, for the Muse section |
-| 0:57 | During the game | A quarter-length file lands in the folder, the watch picks it up, the job runs, and the row says *"Ready to approve from your phone."* | "During the game, the video team drops each quarter into that folder as it ends. Clips Kitty picks it up by itself, finds the dunks, threes and blocks, and cuts each one for Reels." | No |
+| 0:57 | During the game | A quarter-length file lands in the folder, the watch picks it up, the job runs (an on-screen label: Muse Voice + Muse Spark), and the row says *"Ready to approve from your phone."* | "During the game, the video team drops each quarter into that folder as it ends. Clips Kitty picks it up by itself: Muse Voice listens to the commentary, the PC finds the dunks, threes and blocks, and Muse Spark picks the plays and writes the titles." | Meta Model API key, for Muse Voice and Muse Spark |
 | 1:17 | Ask your Muse agent | Phone, in the Muse app: "What highlights are ready?", the counts and clips, then "Send me the approval link" | "You're at the game, not at your desk, so you ask your Muse agent. It tells you what's ready and sends you the link to approve. It can't post anything by itself." | Relay deployed, connector added in Muse |
-| 1:42 | Approve and post | Phone: the approval page, thumbnails, and a clip's **What will be posted** opened to show its Muse Spark captions. Choose Instagram, Facebook and Threads, tick confirm, enter the PIN (masked), **Approve and publish**. Then the Reel on Instagram | "You pick the clips and where they go, and enter your PIN. The office PC checks the approval against the exact files and posts them through Meta's own APIs: Instagram Reels, Facebook Reels and Threads." | Meta app with the accounts connected; Meta Model API key for the captions |
+| 1:42 | Approve and post | Phone: the approval page, thumbnails, and a clip's **What will be posted** opened to show its Muse Spark captions. Choose Instagram, Facebook and Threads, tick confirm, enter the PIN (masked), **Approve and publish**. Then the Reel on Instagram | "You pick the clips and where they go, and enter your PIN. The office PC checks the approval against the exact files and posts them, with Muse Spark's captions, through Meta's own APIs: Instagram Reels, Facebook Reels and Threads." | Meta app with the accounts connected; Meta Model API key for the captions |
 | 2:02 | What got posted | Muse: "What got posted?", with the links | "Muse only reports what Meta confirmed, with the real links." | As above |
 | 2:12 | After the game | **Ask Clips Kitty** at the bottom, with **Muse Spark** in its corner, doing something with the app's tools | "Back at the office, the assistant inside Clips Kitty runs on Muse Spark too, so you can just ask it to do things in the app." | Meta Model API key for the box |
 | 2:22 | Gaming and Just Chatting | One slide, text only: "Also supports gaming and Just Chatting content" | "And it clips gaming and Just Chatting videos too." | No |
-| 2:27 | How it's built | A diagram: the PC runs the vision locally and calls Muse Spark with its own Meta Model API key; a relay on Cloudflare holds the account tokens and is the only thing that talks to WhatsApp, Instagram, Facebook and Threads, and the place Muse connects | "The heavy work stays on the team's own PC, which calls Meta only for Muse Spark. A small relay you own does the rest: your Muse agent, WhatsApp, and posting to Instagram, Facebook and Threads." | No |
+| 2:27 | How it's built | The [README](../../../README.md#architecture)'s diagram, Meta's pieces in blue: the PC runs the vision locally and calls Meta's Model API for Muse Voice and Muse Spark on its own key; a relay on Cloudflare holds the account tokens and is the only thing that talks to WhatsApp, Instagram, Facebook and Threads, and the place Muse connects | "The vision stays on the team's own PC. Muse Voice and Muse Spark do the listening and the writing. A small relay you own does the rest: your Muse agent, WhatsApp, and posting to Instagram, Facebook and Threads." | No |
 | 2:42 | Close | Logo, repo link and the disclaimer | "Clips Kitty: the best plays first, from anywhere." | No |
 
 The vision on the PC is the existing pipeline, unchanged: the
@@ -97,8 +97,12 @@ search (October 2026). That search turned up:
    ([META_PUBLISHING.md](META_PUBLISHING.md)). Use accounts you're happy to post to.
 4. **5. Approve from your phone**: tick **Let me approve publishing from my
    phone** and **Write captions with Muse Spark**.
-5. **Settings → AI**: the Meta Model API key (the box at the bottom, and the
-   captions once **Write captions with Muse Spark** is ticked).
+5. **Settings → AI**: the Meta Model API key. Choose Meta (Muse Spark) under
+   **Clip picking, titles and the assistant** and `muse-voice-transcribe-1.0`
+   under **Transcription**. The key also runs the box at the bottom, and the
+   captions once **Write captions with Muse Spark** is ticked. In the dry run,
+   check the subtitles and the scorer names on the 1995 game: Muse Voice times
+   turns, not words.
 6. **The Drive folder watch:**
    - Switch **Watch channels** on.
    - Watch the shared Drive folder on **Ask me on my phone** with Sports →

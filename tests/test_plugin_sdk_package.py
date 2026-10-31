@@ -18,6 +18,12 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# This repository is the Meta hackathon edition and has its own README.
+# The app's README, which these checks read, is in ColinGPT9/clips-studio, where they run.
+needs_app_readme = pytest.mark.skipif(
+    "\n## Write a plugin\n" not in (ROOT / "README.md").read_text(encoding="utf-8"),
+    reason="the app's README is in ColinGPT9/clips-studio")
 SDK = ROOT / "sdk" / "python"
 PACKAGE = SDK / "clipskitty_sdk"
 if str(SDK) not in sys.path:
@@ -255,6 +261,7 @@ def test_versioning_says_which_release_runs_plugins():
 # ---- links that work on PyPI and in a plugin's own repository ------------------
 
 
+@needs_app_readme
 def test_readme_and_changelog_links_work_outside_the_repository():
     problems = []
     for name in ("README.md", "CHANGELOG.md"):

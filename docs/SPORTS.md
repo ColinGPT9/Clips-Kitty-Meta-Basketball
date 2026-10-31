@@ -221,7 +221,7 @@ Each one becomes a clip, and it's certain: "from your match events".
 
 The box needs a model that can use the app's tools. In this Meta edition, a
 saved Meta Model API key runs it on Muse Spark; otherwise it needs a Gemma 4
-model. See [The text box at the bottom](../README.md#the-text-box-at-the-bottom).
+model: see [the original README](https://github.com/ColinGPT9/clips-studio#the-text-box-at-the-bottom-needs-gemma-4).
 
 ```
 09:22 Kick off

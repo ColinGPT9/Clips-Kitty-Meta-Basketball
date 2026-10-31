@@ -217,7 +217,8 @@ Releasing the desktop consumer preserved the nomination collector, and stopping
 collection closed the listener. The channel was offline: live stream transitions,
 nomination-to-recording clock alignment, native clip creation, token refresh,
 revocation and social delivery remain unverified by that session. See the
-[test log](hackathon/TEST_LOG.md) for the source snapshot and evidence limits.
+[test log](https://github.com/ColinGPT9/clips-studio/blob/6245e02/docs/hackathon/TEST_LOG.md)
+in the original repository for the source snapshot and evidence limits.
 
 Official provider references:
 
