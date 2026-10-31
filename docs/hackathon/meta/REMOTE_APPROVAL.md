@@ -17,7 +17,8 @@ WhatsApp, Graph API or Muse yet.
    missing files, Longform cuts, story reels and clips already posted
    everywhere), pins each file's size and modification time, computes a
    fingerprint over them, and counts highlights by category from the
-   pipeline's own events. State:
+   pipeline's own events (a `big_moment` the pipeline could not name is
+   counted as a "big moment"). State:
    `READY_FOR_REVIEW` → `NOTIFICATION_PENDING`. A failed job queues the plain
    failure message instead, with no error text, when WhatsApp is on (with a
    Muse agent alone, nothing is queued).

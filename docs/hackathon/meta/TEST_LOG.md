@@ -102,11 +102,17 @@ Fixed on this branch:
   `addLocalVideo` now sends them, and `tests/test_ui_local_upload.py` runs
   the real `api.ts` under Node to check what it sends.
 
-Found, not fixed in this run:
+Found in this run, and fixed afterwards (see the Meta-edition features
+below), with tests including
+`test_only_the_clips_this_run_rendered_are_offered` and
+`test_a_clip_counts_once_in_its_first_category`:
 
 - The offer also held the clips of an earlier, non-basketball run of the
-  same video: 4 clips, only 1 of them from this run.
+  same video: 4 clips, only 1 of them from this run. Clips are kept per
+  video, so the offer now takes only the clips whose files were written
+  after the job started.
 - A clip labelled `big_moment` was counted as "other plays" in the message.
+  It now reads "1 big moment".
 
 Not done in the app: approving on the `/a/...` page with the PIN, the fake
 uploads and the result in the card. The end-to-end tests and the demo above
