@@ -1,4 +1,4 @@
-# Submission: Clips Kitty — Meta AI Basketball Highlights & Remote Publishing
+# Submission: Clips Kitty - Meta AI Basketball Highlights & Remote Publishing
 
 **Tagline:** AI basketball highlights with E-BARD tracking, Meta Muse models,
 WhatsApp notifications, and remote Instagram/Facebook/Threads publishing.
@@ -19,28 +19,33 @@ commit `6245e02332ba07e0c9b12d47a95ee81502f4122d`. What is new is listed in
 A small basketball creator records a game, and Clips Kitty finds the
 highlights on their own PC overnight: dunks, threes, blocks, steals. Then
 the clips sit there until the creator is back at the desk to post them,
-and the moment passes. House of Highlights-style accounts win by being
+and the moment passes. The big highlight accounts win by being
 first; a one-person channel can't watch a render bar.
 
 ## What it does
 
 When the PC finishes a game, the creator gets a WhatsApp message with the
 real counts ("5 clips: 2 dunks, 1 three, 1 block and 1 steal"). One tap
-opens a page with the rendered clips and Muse Spark's captions for each
+opens a page with a still from each rendered clip and Muse Spark's captions for each
 platform. They pick the clips and where they go, confirm, enter their PIN,
 and the PC publishes the files it already rendered as Instagram Reels,
 Facebook Page Reels and a Threads post. WhatsApp then says what Meta's APIs
-confirmed, "3 of 3 posts published", with the links.
+confirmed, "3 of 3 posts published", and its View status button opens the confirmed links.
 
 The person running a team's socials doesn't have to start anything either.
 Clips Kitty can watch the team's YouTube channel, its Twitch VODs or a shared
-folder (a Google Drive for desktop folder, say), clip each new game by
+folder (a Google Drive for desktop folder set to Mirror files, say), clip each new game by
 itself, and send the clips to the phone for approval. From anywhere, they
 can ask their **Muse agent** what's ready, get the approval link, and later
 ask what got posted. Muse never posts: the PIN page is the only way to approve.
 
-The heavy work stays local and private: the video, the vision models (E-BARD
-tracking, YOLO, OpenCV, scoreboard reading) and rendering all run on the
+None of this has been tried against Meta's live services yet. Every run so
+far fakes Meta's servers: no WhatsApp message was sent, nothing was
+posted, and neither Muse Spark nor the Muse app was used. See
+[TEST_LOG.md](TEST_LOG.md).
+
+The heavy work stays local and private: the video, the vision models (YOLO, OpenCV,
+scoreboard reading, and [E-BARD](https://github.com/GabrieleGiudic/E-BARD) tracking, used unmodified under CC BY 4.0) and rendering all run on the
 creator's PC, which never opens a port. A tiny relay the creator owns (one
 Cloudflare Worker) is the only thing Meta talks to.
 
@@ -86,9 +91,9 @@ Cloudflare Worker) is the only thing Meta talks to.
 
 ## Inspiration and disclaimer
 
-Inspired by the Toronto Raptors and by highlight accounts like House of
-Highlights. This project is **not affiliated with, endorsed by, or
-sponsored by Meta, House of Highlights, the NBA, or the Toronto Raptors**.
+Inspired by the Toronto Raptors and by basketball highlight accounts. This
+project is **not affiliated with, endorsed by, or sponsored by Meta, the NBA,
+or the Toronto Raptors**.
 Team and player names in examples are illustrative.
 
 ## Team
